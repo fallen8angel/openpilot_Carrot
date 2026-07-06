@@ -420,6 +420,16 @@ base:  kA=1103515245, kC=12345 (glibc LCG), i1=kA*A+kC, i2=kA*B+kC
 
 **다음(ON-not-READY, git pull 후):** `--enable 0x0126 01 --bus 2` → B3687D8B부터 시도. 언락+write POSITIVE 뜨면 재부팅→트랙 확인.
 
+### 2026-07-06 (16) — Daimler(4B키) 전부 0x13 → 키 길이가 다름
+`--enable 0x0126 01` 결과: 후보 12개 **전부 `NACK 0x13 badLength/format`**, **락아웃 안 걸림**, seed 매번 다름(랜덤).
+- **0x13 = 키 값 틀림(0x35)이 아니라 "키 길이/형식 틀림".** 우린 4바이트(Daimler) 보냈는데 레이더는 **다른 길이 키**를 기대. 0x13은 카운터 안 올림 → 락아웃 없었던 이유.
+- ⇒ **알고리즘 계열이 Daimler(8→4B)가 아님.** 키 길이 미지 → 실측 필요.
+
+**8바이트-키 알고리즘 후보(db.json):** **VDOSecurityAlgo(VDO=콘티넨탈 브랜드, 8→8, param K/InternalLevel)** ⭐, IC172Algo1(8→8, 하드코딩 키풀=상수 불필요), IC204(8→8, Salt), ArrayReverseAlgo(8→8). 소스 확보함.
+
+**신규 `--probe-keylen`**: level 0x11에서 더미 제로키를 길이 1~16으로 보내 **맞는 길이 실측**(틀림=0x13, 맞음=0x35). 맞는 길이만 카운터↑라 안전.
+**다음:** `--probe-keylen --bus 2` (ON-not-READY) → 키 길이 확정 → 그 길이 알고리즘(8이면 VDO/IC172부터) 포팅.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)

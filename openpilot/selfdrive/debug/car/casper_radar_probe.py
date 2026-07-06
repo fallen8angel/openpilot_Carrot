@@ -197,6 +197,46 @@ def do_enable(uds, keys, variant, did, value, session=0x05, level=0x11):
         print(f"  write REJECTED: {nrc(e)}")
 
 
+def probe_keylen(uds, session, level=0x11):
+    # Our 4-byte key gave 0x13 (badLength). Find the expected key length: send a dummy
+    # zero-key of each length; wrong length -> 0x13, CORRECT length -> 0x35 (invalidKey).
+    # Only the correct length increments the failed-attempt counter, so this is safe.
+    print(f"\n[KEY-LENGTH PROBE] session 0x{session:02x} level 0x{level:02x}")
+    print("  0x13=wrong length | 0x35=CORRECT length(wrong value) | positive=zero-key unlocked")
+    try:
+        uds.diagnostic_session_control(session)
+    except NegativeResponseError as e:
+        print(f"  cannot enter session 0x{session:02x}: {nrc(e)}")
+        return
+    for L in range(1, 17):
+        try:
+            uds.security_access(level)  # request+discard seed
+        except NegativeResponseError as e:
+            if getattr(e, "error_code", None) == 0x24:  # sequence -> re-enter session
+                try:
+                    uds.diagnostic_session_control(session)
+                    uds.security_access(level)
+                except NegativeResponseError:
+                    print(f"  len {L}: requestSeed re-enter failed")
+                    return
+            else:
+                print(f"  len {L}: requestSeed {nrc(e)}")
+                if getattr(e, "error_code", None) in (0x36, 0x37):
+                    return
+                continue
+        try:
+            uds.security_access(level + 1, bytes(L))
+            print(f"  len {L}: *** POSITIVE (zero key accepted!) ***")
+            return
+        except NegativeResponseError as e:
+            code = getattr(e, "error_code", None)
+            tag = "  <== CORRECT KEY LENGTH" if code == 0x35 else ""
+            print(f"  len {L}: {nrc(e)}{tag}")
+            if code in (0x36, 0x37):
+                print("  lockout - power cycle & rerun")
+                return
+
+
 def scan_security(uds, session):
     # write in 0x05 needs SecurityAccess but level 1 (0x27 01) is subFunctionNotSupported.
     # Scan all requestSeed sub-functions (odd) to find which level the radar uses.
@@ -303,6 +343,8 @@ if __name__ == "__main__":
                    help="probe SecurityAccess seed (level 1) in given session, e.g. --request-seed 0x03")
     p.add_argument("--scan-security", metavar="HH", dest="scan_security",
                    help="scan all requestSeed levels in a session, e.g. --scan-security 0x05")
+    p.add_argument("--probe-keylen", action="store_true", dest="probe_keylen",
+                   help="find expected sendKey length in session 0x05 level 0x11")
     p.add_argument("--unlock", action="store_true",
                    help="try candidate cryptoKeys to unlock SecurityAccess (session 0x05 lvl 0x11)")
     p.add_argument("--enable", nargs=2, metavar=("DID", "HEX"),
@@ -314,7 +356,7 @@ if __name__ == "__main__":
     p.add_argument("--bus", type=int, default=2)
     a = p.parse_args()
     if not any([a.read, a.write, a.scan_sessions, a.try_session, a.request_seed, a.scan_security,
-                a.unlock, a.enable]):
+                a.probe_keylen, a.unlock, a.enable]):
         p.print_help()
         sys.exit(1)
     try:
@@ -343,6 +385,8 @@ if __name__ == "__main__":
         request_seed(uds, int(a.request_seed, 16))
     if a.scan_security:
         scan_security(uds, int(a.scan_security, 16))
+    if a.probe_keylen:
+        probe_keylen(uds, 0x05)
     keys = [k.strip() for k in a.keys.split(",")] if a.keys else DEFAULT_KEYS
     unlock_session = 0x05  # SecurityAccess-gated write session on MRR-35
     if a.unlock:
