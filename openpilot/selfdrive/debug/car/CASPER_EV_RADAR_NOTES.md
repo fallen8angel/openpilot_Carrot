@@ -287,6 +287,23 @@ write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
 
 **참고**: 만도 리버스는 다수 유저·다수 차량·다수 로그의 집단작업이었음. 개인+단일차량은 불리하나 불가능은 아님. 단 **enable 단계에서 막혀 있어(트랙이 안 흐름) 포맷 해독으로 넘어가지도 못하는** 상태가 핵심 병목.
 
+### 2026-07-06 (7) — seed 프로브 + 세션 재시도 (전부 READY 상태)
+```
+--request-seed 0x03 → NACK 0x12 subFunctionNotSupported  = 확장세션엔 SecurityAccess 서비스 없음(보안은 0x02 안에 있을 것)
+--try-session 0x02  → NACK 0x22 conditionsNotCorrect     (아직 READY)
+--try-session 0x05  → NACK 0x22 conditionsNotCorrect     (아직 READY)
+```
+**병목 재확인: 전선은 "세션 0x02/0x05 진입" 하나.** 아직 **ON-not-READY 미시도** + **0x03→0x02 체인 미시도**.
+
+**남은 두 가설 (다음 실험):**
+1. **체인 세션**: default→0x03→0x02 (많은 ECU가 extended 먼저 요구). → `try_session` 자동 테스트하게 개선(direct + via 0x03).
+2. **시동상태**: ON-not-READY(시동버튼 2번, 브레이크 X). 지금까지 전부 READY라 미검증.
+
+→ 다음: **ON-not-READY 상태**에서 `--try-session 0x02`, `--try-session 0x05` (이제 direct+via0x03 둘 다 자동 시도).
+- ACCEPTED → 그 세션서 `--request-seed`로 보안 유무 확인 → 없으면 `--write` 크랙 계속.
+- 여전히 0x22 → 전제조건이 시동/체인 아님(루틴/tester 등 미지) → 마스터 문의.
+- 0x33 → 보안잠금 = 펌웨어RE 티어.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)

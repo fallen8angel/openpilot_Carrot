@@ -106,19 +106,36 @@ def request_seed(uds, session):
         print("  0x7F=security in another session | 0x31/0x12=no security here | 0x22=preconditions")
 
 
+def _to_default(uds):
+    try:
+        uds.diagnostic_session_control(SESSION_TYPE.DEFAULT)
+    except NegativeResponseError:
+        pass
+
+
 def try_session(uds, st):
     print(f"\n[TRY SESSION 0x{st:02x}]")
+    # (1) direct from default session
     try:
         uds.diagnostic_session_control(st)
-        print(f"  session 0x{st:02x}: ACCEPTED  <-- write may be possible here")
-        try:
-            uds.diagnostic_session_control(SESSION_TYPE.DEFAULT)
-        except NegativeResponseError:
-            pass
+        print(f"  direct: ACCEPTED  <-- write may be possible here")
+        _to_default(uds)
+        return
     except NegativeResponseError as e:
-        print(f"  session 0x{st:02x}: {nrc(e)}")
-        print("  (0x22 conditionsNotCorrect = session exists but preconditions unmet; "
-              "try car in ON-not-READY / different ignition state)")
+        print(f"  direct: {nrc(e)}")
+    # (2) chained: default -> extended(0x03) -> target (many ECUs require extended first)
+    _to_default(uds)
+    try:
+        uds.diagnostic_session_control(SESSION_TYPE.EXTENDED_DIAGNOSTIC)
+        uds.diagnostic_session_control(st)
+        print(f"  via 0x03: ACCEPTED  <-- needed extended-first! write may work here")
+        _to_default(uds)
+        return
+    except NegativeResponseError as e:
+        print(f"  via 0x03: {nrc(e)}")
+    _to_default(uds)
+    print("  -> still blocked. If 0x22: try car in ON-not-READY (start x2, no brake). "
+          "If 0x33: security-gated.")
 
 
 def do_write(uds, did, nb, bus, session=0x03):
