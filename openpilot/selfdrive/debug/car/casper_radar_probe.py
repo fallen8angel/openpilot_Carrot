@@ -138,32 +138,45 @@ def try_session(uds, st):
           "If 0x33: security-gated.")
 
 
-def do_write(uds, did, nb, bus, session=0x03):
-    print(f"\n[WRITE] DID 0x{did:04x} <- 0x{nb.hex()}  (in session 0x{session:02x})")
+def do_write(uds, did, nb, bus, session=0x02):
+    # NOTE: on MRR-35, ReadDataByIdentifier works in EXTENDED (0x03) but not in
+    # PROGRAMMING (0x02); WriteDataByIdentifier needs 0x02. So: read via 0x03,
+    # write via `session`, read-back via 0x03.
+    print(f"\n[WRITE] DID 0x{did:04x} <- 0x{nb.hex()}  (write-session 0x{session:02x})")
+    cur = None
+    try:
+        uds.diagnostic_session_control(SESSION_TYPE.EXTENDED_DIAGNOSTIC)
+        cur, _ = rd(uds, did)
+    except NegativeResponseError:
+        pass
+    if cur is not None:
+        print(f"  current value (read via 0x03): 0x{cur.hex()}")
+        print(f"  >>> REVERT (save!): python {sys.argv[0]} --write 0x{did:04x} {cur.hex()} "
+              f"--session 0x{session:02x} --bus {bus}")
+    else:
+        print("  (could not pre-read; be sure you know the revert value!)")
     try:
         uds.diagnostic_session_control(session)
-        print(f"  entered session 0x{session:02x}")
+        print(f"  entered write-session 0x{session:02x}")
     except NegativeResponseError as e:
         print(f"  cannot enter session 0x{session:02x}: {nrc(e)} (aborting)")
         return
-    cur, e = rd(uds, did)
-    if cur is None:
-        print(f"  cannot read current value: {e} (aborting, nothing written)")
-        return
-    print(f"  current value: 0x{cur.hex()}")
-    print(f"  >>> REVERT (save this!): python {sys.argv[0]} --write 0x{did:04x} {cur.hex()} --bus {bus}")
     if input("  type WRITE to proceed: ").strip() != "WRITE":
         print("  not confirmed, nothing written.")
         return
     try:
         uds.write_data_by_identifier(did, nb)
-        print("  write request sent (positive response).")
+        print("  *** write POSITIVE response! ***")
     except NegativeResponseError as e:
         print(f"  write REJECTED: {nrc(e)}")
         return
-    b, e = rd(uds, did)
-    print(f"  read-back: {('0x' + b.hex()) if b is not None else e}")
-    print("  NEXT: restart car, boot (RadarTracks=3), record log, then casper_radar_scan.py diff.")
+    try:
+        uds.diagnostic_session_control(SESSION_TYPE.EXTENDED_DIAGNOSTIC)
+        b, _ = rd(uds, did)
+        print(f"  read-back (via 0x03): {('0x' + b.hex()) if b is not None else 'unreadable'}")
+    except NegativeResponseError:
+        pass
+    print("  NEXT: restart car (READY), boot (RadarTracks=3), record log, casper_radar_scan.py diff.")
     print("  If no new track block -> REVERT with the command above.")
 
 

@@ -304,6 +304,31 @@ write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
 - 여전히 0x22 → 전제조건이 시동/체인 아님(루틴/tester 등 미지) → 마스터 문의.
 - 0x33 → 보안잠금 = 펌웨어RE 티어.
 
+### 2026-07-06 (8) — 🎯 돌파: ON-not-READY에서 세션 진입 성공
+```
+--try-session 0x02 → direct: ACCEPTED
+--try-session 0x05 → direct: ACCEPTED
+```
+- **conditionsNotCorrect(0x22)의 원인 = 시동상태 확정.** ON-not-READY(시동 2번, 브레이크 X)로 바꾸니 programming 세션(0x02)·0x05 모두 **직접 진입 성공**. 보안잠금 아님(진입 단계).
+- → 시나리오 (A) 유력. 다음: **0x02 안에 SecurityAccess 있나** + **실제 write 되나**.
+
+**다음 실험 (ON-not-READY 유지):**
+1. `--request-seed 0x02` → 0x12/미지원=보안없음(write 가능성↑), seed=보안잠금.
+2. `--write 0x0126 01 --session 0x02` → positive면 재시동→트랙 확인. 0x33이면 보안.
+자세한 usability(영구성) 판단은 write 성공 후 재부팅 스캔으로.
+
+### 2026-07-06 (9) — 보안 없음 확인 + 세션별 서비스 분리 파악
+```
+--request-seed 0x02 → NACK 0x12 subFunctionNotSupported = programming 세션에 SecurityAccess 없음 ✅
+--write ... --session 0x02 → "cannot read current: NACK 0x7f svcNotSupportedInSession"
+```
+**핵심 구조 파악**: 서비스가 세션별로 갈림 —
+- **ReadDataByIdentifier(0x22): 확장세션 0x03에서만** (programming 0x02에선 0x7F)
+- **WriteDataByIdentifier(0x2E): programming 0x02 필요** (0x03에선 0x7F)
+
+→ `do_write` 수정: **읽기는 0x03, 쓰기는 0x02, 읽기백은 0x03**. (0x0126 기본값=00 이미 확인됨, revert=00)
+→ 보안 없음 확정이라 write 성공 가능성 높음. 다음: git pull 후 재실행.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
