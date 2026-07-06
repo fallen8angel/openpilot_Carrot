@@ -430,6 +430,20 @@ base:  kA=1103515245, kC=12345 (glibc LCG), i1=kA*A+kC, i2=kA*B+kC
 **신규 `--probe-keylen`**: level 0x11에서 더미 제로키를 길이 1~16으로 보내 **맞는 길이 실측**(틀림=0x13, 맞음=0x35). 맞는 길이만 카운터↑라 안전.
 **다음:** `--probe-keylen --bus 2` (ON-not-READY) → 키 길이 확정 → 그 길이 알고리즘(8이면 VDO/IC172부터) 포팅.
 
+### 2026-07-06 (17) — 🎯 키 길이 = 8바이트 확정
+`--probe-keylen`: **len 8만 `0x35`(invalidKey=올바른 길이), 나머지 전부 0x13.** 카운터 1만 증가(안전).
+⇒ **seed 8B → key 8B.** 후보: VDOSecurityAlgo(콘티넨탈,K필요), **ArrayReverse(seed뒤집기, 상수無)**, **IC172(하드코딩 풀, 상수無)**, IC204(Salt).
+
+**probe 개편**: unlock을 4바이트 Daimler → **8바이트 알고리즘 방식**으로 교체.
+- `--algos arrayreverse,ic172` (기본), 각 알고리즘이 8B key 생성 → sendKey.
+- `--enable 0x0126 01` : 언락(자기완결형 알고리즘부터) → 성공 시 같은 세션 write.
+- 자기완결형(arrayreverse/ic172)은 **미지수 없음** → 맞으면 바로 뚫림. 틀리면 0x35(카운터↑) → 3회쯤서 락아웃, 전원재투입 후 `--algos <남은것>`.
+
+### 2026-07-07 재개 — 8바이트 알고리즘 시도 준비 완료
+probe 스크립트 8바이트 버전 반영+문법검증+포팅 자체테스트 완료(IC172 키 끝 "UECU" 확인).
+**다음(ON-not-READY, git pull 후):** `--enable 0x0126 01 --bus 2` → arrayreverse→ic172 순 시도.
+- 둘 다 0x35(invalidKey)면 자기완결형 아님 → VDO(콘티넨탈, 후보 K 상수들) 포팅으로.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)

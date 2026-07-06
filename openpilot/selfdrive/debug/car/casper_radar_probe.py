@@ -113,51 +113,69 @@ def _to_default(uds):
         pass
 
 
-# --- Continental "DaimlerStandardSecurity" seed->key (ported from jglim/UnlockECU) ---
-# 8-byte seed -> 4-byte key. key = (i1 ^ i2 ^ cryptoKey) & 0xFFFFFFFF.
-# EARS167 (Continental radar) = RefG with cryptoKey B3687D8B; whole B3687D8X family are radars.
-M32 = 0xFFFFFFFF
-# ranked candidate cryptoKeys (Continental radar family first)
-DEFAULT_KEYS = ["B3687D8B", "B3687D83", "B3687D87", "B3687D89", "B3687D8D", "B3687D8F",
-                "DEDE947A", "FFFFFFFF", "CEF734C3", "8B014327", "2B972AC5", "EA85C49B"]
+# --- 8-byte seed -> 8-byte key algorithms (ported from jglim/UnlockECU) ---
+# Probed: radar wants an 8-byte key. Self-contained algos (no per-ECU secret) first.
+
+def keygen_arrayreverse(seed):
+    return bytes(reversed(seed))
 
 
-def daimler_key(seed, cryptokey, variant="refG"):
-    a = int.from_bytes(seed[0:4], "big")
-    b = int.from_bytes(seed[4:8], "big")
-    K = cryptokey & M32
-    if variant == "refG":
-        i1 = (3040238857 * a + 2094854071) & M32
-        i2 = (4126034881 * b + 3555108353) & M32
-    else:  # base: glibc LCG constants
-        i1 = (1103515245 * a + 12345) & M32
-        i2 = (1103515245 * b + 12345) & M32
-    return ((i1 ^ i2 ^ K) & M32).to_bytes(4, "big")
+def keygen_ic172(seed):
+    seedInput = [seed[0], seed[2], seed[4], seed[6]]
+    sn = []
+    for b in seedInput:
+        sn += [(b >> 4) & 0xF, b & 0xF]  # 8 nibbles
+    keyPool = [
+        [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01],
+        [0x45, 0x67, 0x01, 0x23, 0xCD, 0xEF, 0x89, 0xAB],
+        [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF],
+        [0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67],
+        [0x54, 0x76, 0x10, 0x32, 0xDC, 0xFE, 0x98, 0xBA],
+        [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01],
+        [0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67],
+        [0xBA, 0x98, 0xFE, 0xDC, 0x32, 0x10, 0x76, 0x54],
+    ]
+    transposition = [5, 2, 7, 4, 1, 6, 3, 0]
+    inter = []
+    for i in range(8):
+        pool = []
+        for b in keyPool[i]:
+            pool += [(b >> 4) & 0xF, b & 0xF]  # 16 nibbles
+        inter.append(pool[sn[transposition[i]]])
+    assembled = bytes(((inter[2 * i] << 4) | inter[2 * i + 1]) for i in range(4))
+    return assembled + bytes([0x55, 0x45, 0x43, 0x55])  # + "UECU"
 
 
-def do_unlock(uds, session, keys, variant, level=0x11):
-    """Enter session, try candidate cryptoKeys. On success LEAVE session unlocked
-    (no session switch) and return the winning key; else None. Stops on lockout."""
-    print(f"\n[UNLOCK] session 0x{session:02x} level 0x{level:02x} variant={variant} "
-          f"({len(keys)} candidate keys)")
+KEYGENS = {"arrayreverse": keygen_arrayreverse, "ic172": keygen_ic172}
+DEFAULT_ALGOS = ["arrayreverse", "ic172"]
+
+
+def do_unlock(uds, session, algos, level=0x11):
+    """Enter session, try each 8-byte key algo. On success LEAVE session unlocked
+    (no session switch) and return the winning algo name; else None. Stops on lockout."""
+    print(f"\n[UNLOCK] session 0x{session:02x} level 0x{level:02x} algos={algos}")
     try:
         uds.diagnostic_session_control(session)
     except NegativeResponseError as e:
         print(f"  cannot enter session 0x{session:02x}: {nrc(e)}")
         return None
-    def lockout(remaining):
-        print(f"  >>> LOCKOUT (too many attempts). Power-cycle car, rerun with:")
-        print(f"      --keys {','.join(remaining)}")
 
-    for i, ck_hex in enumerate(keys):
-        ck = int(ck_hex, 16)
+    def lockout(remaining):
+        print("  >>> LOCKOUT (too many attempts). Power-cycle car, rerun with:")
+        print(f"      --algos {','.join(remaining)}")
+
+    for i, name in enumerate(algos):
+        gen = KEYGENS.get(name)
+        if gen is None:
+            print(f"  unknown algo '{name}', skipping")
+            continue
         try:
             seed = uds.security_access(level)
         except NegativeResponseError as e:
             code = getattr(e, "error_code", None)
             print(f"  requestSeed: {nrc(e)}")
             if code in (0x36, 0x37):
-                lockout(keys[i:])
+                lockout(algos[i:])
                 return None
             try:  # recover sequence by re-entering session
                 uds.diagnostic_session_control(session)
@@ -165,34 +183,34 @@ def do_unlock(uds, session, keys, variant, level=0x11):
             except NegativeResponseError:
                 return None
         if not any(seed):
-            print("  seed is all-zero -> already unlocked")
+            print("  seed all-zero -> already unlocked")
             return "already"
-        key = daimler_key(seed, ck, variant)
+        key = gen(seed)
         try:
             uds.security_access(level + 1, key)
-            print(f"  key {ck_hex}: seed={seed.hex()} -> key={key.hex()} -> *** UNLOCKED! ***")
-            return ck_hex
+            print(f"  {name}: seed={seed.hex()} -> key={key.hex()} -> *** UNLOCKED! ***")
+            return name
         except NegativeResponseError as e:
             code = getattr(e, "error_code", None)
-            print(f"  key {ck_hex}: seed={seed.hex()} key={key.hex()} -> {nrc(e)}")
+            print(f"  {name}: seed={seed.hex()} key={key.hex()} -> {nrc(e)}")
             if code in (0x36, 0x37):
-                lockout(keys[i + 1:])
+                lockout(algos[i + 1:])
                 return None
-    print("  no candidate cryptoKey unlocked.")
+    print("  no candidate algorithm unlocked.")
     return None
 
 
-def do_enable(uds, keys, variant, did, value, session=0x05, level=0x11):
-    win = do_unlock(uds, session, keys, variant, level)  # leaves 0x05 unlocked on success
+def do_enable(uds, algos, did, value, session=0x05, level=0x11):
+    win = do_unlock(uds, session, algos, level)  # leaves 0x05 unlocked on success
     if not win:
         print("  not unlocked -> aborting write.")
         return
-    print(f"  (unlocked with {win}) writing DID 0x{did:04x} = 0x{value.hex()} in session 0x{session:02x}...")
+    print(f"  (unlocked via {win}) writing DID 0x{did:04x}=0x{value.hex()} in session 0x{session:02x}...")
     try:
         uds.write_data_by_identifier(did, value)  # same unlocked session, no switch!
         print(f"  *** WRITE 0x{did:04x}=0x{value.hex()} POSITIVE RESPONSE! ***")
         print("  NEXT: restart car (READY), boot openpilot (RadarTracks=3), record log, scan diff.")
-        print(f"  REVERT: --enable 0x{did:04x} 00 --bus <bus>  (writes back 00)")
+        print(f"  REVERT: --enable 0x{did:04x} 00")
     except NegativeResponseError as e:
         print(f"  write REJECTED: {nrc(e)}")
 
@@ -346,11 +364,10 @@ if __name__ == "__main__":
     p.add_argument("--probe-keylen", action="store_true", dest="probe_keylen",
                    help="find expected sendKey length in session 0x05 level 0x11")
     p.add_argument("--unlock", action="store_true",
-                   help="try candidate cryptoKeys to unlock SecurityAccess (session 0x05 lvl 0x11)")
+                   help="try candidate key algos to unlock SecurityAccess (session 0x05 lvl 0x11)")
     p.add_argument("--enable", nargs=2, metavar=("DID", "HEX"),
                    help="unlock then write DID in the SAME session, e.g. --enable 0x0126 01")
-    p.add_argument("--keys", help="comma-separated candidate cryptoKeys (hex); default=radar family")
-    p.add_argument("--variant", default="refG", help="key algorithm variant: refG (default) or base")
+    p.add_argument("--algos", help="comma-separated 8-byte key algos (arrayreverse,ic172); default all")
     p.add_argument("--write", nargs=2, metavar=("DID", "HEX"))
     p.add_argument("--session", default="0x03", help="session for --write (default 0x03)")
     p.add_argument("--bus", type=int, default=2)
@@ -387,12 +404,12 @@ if __name__ == "__main__":
         scan_security(uds, int(a.scan_security, 16))
     if a.probe_keylen:
         probe_keylen(uds, 0x05)
-    keys = [k.strip() for k in a.keys.split(",")] if a.keys else DEFAULT_KEYS
+    algos = [k.strip() for k in a.algos.split(",")] if a.algos else DEFAULT_ALGOS
     unlock_session = 0x05  # SecurityAccess-gated write session on MRR-35
     if a.unlock:
-        do_unlock(uds, unlock_session, keys, a.variant)
+        do_unlock(uds, unlock_session, algos)
     if a.enable:
-        do_enable(uds, keys, a.variant, int(a.enable[0], 16), bytes.fromhex(a.enable[1]),
+        do_enable(uds, algos, int(a.enable[0], 16), bytes.fromhex(a.enable[1]),
                   session=unlock_session)
     if a.write:
         do_write(uds, int(a.write[0], 16), bytes.fromhex(a.write[1]), a.bus, int(a.session, 16))
