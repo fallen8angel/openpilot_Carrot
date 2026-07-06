@@ -228,6 +228,21 @@ write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
 
 **다음**: `casper_radar_probe.py --scan-sessions --bus 2` (신규) — 레이더가 받아주는 진단세션 열거(0x01~0x0f, 0x40~0x4f, 0x60~0x6f). 쓰기 가능한 비-기본 세션이 있으면 그 안에서 write 재시도. 0x01/0x03만 열리면 → 보안/미지세션 잠금으로 판단, 마스터/커뮤니티 문의로 전환.
 
+### 2026-07-06 (5) — 세션 스캔 (READY 상태)
+```
+0x01 default    : ACCEPTED
+0x02 programming: NACK 0x22 conditionsNotCorrect   ← 존재O, 조건 안 맞음
+0x03 extended   : ACCEPTED
+0x05 (제조사?)   : NACK 0x22 conditionsNotCorrect   ← 존재O, 조건 안 맞음
+(그 외 0x04,0x06~0f,0x40~4f,0x60~6f: 미지원)
+```
+- 0x02/0x05가 **`subFunctionNotSupported`(없음)가 아니라 `conditionsNotCorrect`(0x22)** = **세션은 실재하나 진입 전제조건 미충족.** 보안거부(0x33)는 아직 아님.
+- 0x22는 흔히 **시동/모터 상태 조건** → **READY(모터ON) 말고 ON-not-READY(시동버튼 2번, 브레이크 X)** 로 재시도할 가치 있음.
+
+**신규 옵션**: `--try-session 0xNN` (세션 진입만 테스트), `--write ... --session 0xNN` (지정 세션에서 write).
+**다음 실험(ON-not-READY 상태)**: `--try-session 0x02`, `--try-session 0x05` → ACCEPTED 뜨면 `--write 0x0126 01 --session 0x02`.
+→ ON 상태에서도 0x22/0x33이면 → **보안잠금/전제조건 미지 = 소프트웨어 단독으론 벽 확정 → 마스터 문의로 전환.**
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
