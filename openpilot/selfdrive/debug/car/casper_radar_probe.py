@@ -58,6 +58,32 @@ def do_read(uds):
     print(f"  -> {n} readable config DIDs")
 
 
+def scan_sessions(uds):
+    # Which diagnostic sessions does the radar accept? Config WRITE (0x2E) needs the
+    # right one (Mando used 0x07; MRR-35 rejected 0x07 and 0x03). Scan the reserved
+    # low range + manufacturer/supplier ranges. Returns to DEFAULT after each hit.
+    print("\n[SESSION SCAN] (looking for a session that might allow WriteDataByIdentifier)")
+    accepted = []
+    for st in list(range(0x01, 0x10)) + list(range(0x40, 0x50)) + list(range(0x60, 0x70)):
+        try:
+            uds.diagnostic_session_control(st)
+            accepted.append(st)
+            print(f"  session 0x{st:02x}: ACCEPTED")
+            try:
+                uds.diagnostic_session_control(SESSION_TYPE.DEFAULT)
+            except NegativeResponseError:
+                pass
+        except NegativeResponseError as e:
+            code = getattr(e, "error_code", None)
+            if code not in (0x11, 0x12):  # hide "not supported" noise
+                print(f"  session 0x{st:02x}: {nrc(e)}")
+        except Exception as ex:
+            print(f"  session 0x{st:02x}: no response ({type(ex).__name__}) -- radar may have dropped off bus")
+    print(f"  -> accepted sessions: {[hex(s) for s in accepted]}")
+    print("  next: retry --write inside an accepted non-default session (edit do_write), "
+          "or if only 0x01/0x03 -> config write likely locked behind security/unknown session.")
+
+
 def do_write(uds, did, nb, bus):
     print(f"\n[WRITE] DID 0x{did:04x} <- 0x{nb.hex()}")
     uds.diagnostic_session_control(SESSION_TYPE.EXTENDED_DIAGNOSTIC)
@@ -85,10 +111,11 @@ def do_write(uds, did, nb, bus):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--read", action="store_true")
+    p.add_argument("--scan-sessions", action="store_true", dest="scan_sessions")
     p.add_argument("--write", nargs=2, metavar=("DID", "HEX"))
     p.add_argument("--bus", type=int, default=2)
     a = p.parse_args()
-    if not a.read and not a.write:
+    if not a.read and not a.write and not a.scan_sessions:
         p.print_help()
         sys.exit(1)
     try:
@@ -109,5 +136,7 @@ if __name__ == "__main__":
     print(f"  {v!r}" if v is not None else f"  {e}")
     if a.read:
         do_read(uds)
+    if a.scan_sessions:
+        scan_sessions(uds)
     if a.write:
         do_write(uds, int(a.write[0], 16), bytes.fromhex(a.write[1]), a.bus)

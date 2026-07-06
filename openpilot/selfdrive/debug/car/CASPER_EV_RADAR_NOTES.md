@@ -202,6 +202,32 @@ ACC_ObjRelSpd : bit44 len12 (x0.1, off -170)
 
 ⚠️ 안전장치(AEB/FCW) 영향 위험. 정차·안전장소, revert 명령 보관, 후 제동 테스트 필수.
 
+### 2026-07-06 (3) — `casper_radar_probe.py --read` (식별정보 추가 수집)
+식별 DID(읽기전용, enable 단서는 없으나 기록):
+| DID | 값 | 의미 |
+|-----|-----|------|
+| 0xF187 | `99110GX000` | 스페어파트 넘버 |
+| 0xF18B | `20250313` | 제조일 2025-03-13 |
+| 0xF18C | `25C13CA5472` | ECU 시리얼 |
+| 0xF191 / F193 | `1.00` | HW 넘버 / 서플라이어 HW 버전 |
+| 0xF197 | `FR_RDR` | 시스템명 = Front Radar |
+
+**중요 관찰**: `0x0171`이 스캔①(0x91)→스캔②(0x90)로 **값 변동** = **동적 상태값(config 토글 아님)**. write 금지. 레이더가 실제 연산 중(살아있음)이라는 증거.
+→ 순수 config 후보는 여전히 `0x0126`(00), `0x0129`(00). 다음: write 실험 진행.
+
+### 2026-07-06 (4) — write 시도 → 세션 벽
+`--write 0x0126 01 --bus 2` (확장세션 0x03 안에서 시도):
+```
+write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
+```
+= **WriteDataByIdentifier(0x2E) 서비스가 확장세션(0x03)에선 미지원.** config write는 **다른 세션**에서만 가능.
+- SecurityAccess 거부(0x33) 아님 → 순수 세션 문제.
+- 만도는 write를 세션 **0x07**에서 했지만 MRR-35는 0x07 거부(NRC12). → MRR-35의 write 세션은 0x03도 0x07도 아닌 미지의 세션.
+
+**남은 관문(냉정): (올바른 세션) + (아마 SecurityAccess seed/key) + (올바른 DID/값).** 세션은 스캔으로 찾을 수 있으나, 뒤에 보안잠금 있으면 제조사 키 없이는 **벽**.
+
+**다음**: `casper_radar_probe.py --scan-sessions --bus 2` (신규) — 레이더가 받아주는 진단세션 열거(0x01~0x0f, 0x40~0x4f, 0x60~0x6f). 쓰기 가능한 비-기본 세션이 있으면 그 안에서 write 재시도. 0x01/0x03만 열리면 → 보안/미지세션 잠금으로 판단, 마스터/커뮤니티 문의로 전환.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
