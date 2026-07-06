@@ -41,16 +41,19 @@ def load_addr_by_bus(path):
     addr_by_bus = collections.defaultdict(collections.Counter)
     car = None
     n = t0 = t1 = None
-    for e in log_capnp.Event.read_multiple_bytes(dat):
-        if t0 is None:
-            t0 = e.logMonoTime
-        t1 = e.logMonoTime
-        w = e.which()
-        if w == "can":
-            for c in e.can:
-                addr_by_bus[c.src][c.address] += 1
-        elif w == "carParams" and car is None:
-            car = e.carParams.carFingerprint
+    try:
+        for e in log_capnp.Event.read_multiple_bytes(dat):
+            if t0 is None:
+                t0 = e.logMonoTime
+            t1 = e.logMonoTime
+            w = e.which()
+            if w == "can":
+                for c in e.can:
+                    addr_by_bus[c.src][c.address] += 1
+            elif w == "carParams" and car is None:
+                car = e.carParams.carFingerprint
+    except Exception as ex:  # truncated/unfinished segment -> use what we read
+        print(f"  (note: log ended early / truncated: {type(ex).__name__}; using partial data)")
     dur = (t1 - t0) / 1e9 if t0 else 0.0
     return addr_by_bus, car, dur
 

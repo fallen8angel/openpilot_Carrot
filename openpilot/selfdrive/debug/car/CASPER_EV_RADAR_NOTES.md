@@ -245,6 +245,50 @@ write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
 
 ---
 
+### 2026-07-06 (6) — 주행 로그 (움직일 때 트랙 나오나 검증)
+로그 `a.zst`(주행, vEgo 최대 26.2km/h, 절반 이동), `aa.zst`(잘린 로그, 무시).
+- `a.zst` vs baseline diff: 새 주소는 전부 진단(0x7xx UDS)+0x40a 단발. **트랙 배열 0건.**
+- **결론: 정차(로그2개) + 주행(26km/h)** 어느 상태에서도 MRR-35는 원시 트랙 배열을 CAN에 안 뿌림. "움직일 때만" 가설 기각.
+
+---
+
+## 9. 최종 상태 (2026-07-06 기준) — 소프트웨어 단독 경로 소진
+
+**확정된 사실:**
+1. MRR-35 살아있음 (UDS 응답, SCC 연산 중, 0x0171 동적값 변동).
+2. 만도 방식 불가: 세션 0x07 거부(NRC12), DID 0x0142 없음.
+3. config **읽기**는 확장세션(0x03)에서 가능(DID 9개), 그러나 **쓰기**는 0x03에서 미지원(NRC 0x7F).
+4. 쓰기 가능 세션 후보(0x02 programming, 0x05)는 실재하나 `conditionsNotCorrect`(0x22)로 잠김. (보안/전제조건)
+5. 정차·주행 어느 상태에서도 **원시 트랙 배열 미방송**.
+
+**판정: 제조사 세션 키/지식 없이는 소프트웨어 단독으로 MRR-35 트랙 출력을 못 켬 = 현재 경로 벽.**
+(미확인 잔여: ON-not-READY 상태에서 0x02/0x05 재시도 → `--try-session`. 이것도 0x22/0x33이면 벽 확정.)
+
+**다음(외부 지식 필요):**
+- 이 문서 들고 **Carrot 마스터에게 문의**: 콘티넨탈 MRR-35 트랙 enable 세션/SecurityAccess/DID 아는지.
+- 또는 MRR-35가 애초에 CAN으로 원시 트랙을 안 뿌리는 설계(카메라 사설링크로만 전달)일 가능성 인정.
+
+## 10. 리버스 가능성 — "A냐 B냐" 판별이 관건
+
+만도 unlock이 개인 리버스로 가능했던 이유 = **보안잠금이 없었음**(세션0x07+DID0x0142 write가 그냥 먹힘). MRR-35의 write 세션(0x02/0x05)은 `conditionsNotCorrect`(0x22)로 막혀 아직 미확정:
+- **(A) 전제조건만** (시동상태/루틴/tester-present) → 만도급, 개인 크랙 가능.
+- **(B) SecurityAccess(seed/key)** → 브루트포스 불가, **펌웨어 덤프+디스어셈블로 seed→key 루틴 추출** 필요 = 상위 티어.
+
+**판별 도구** (신규): `casper_radar_probe.py --request-seed 0x03 --bus 2`
+- SEED 반환 → (B) 보안잠금 확정.
+- 0x7F/0x31/0x12 → 그 세션엔 보안 없음(다른 세션 시도).
+- 0x22 → 전제조건 문제.
+
+**미완 실험 (다음 차 방문 시, ON-not-READY 상태):**
+1. `--request-seed 0x03` (보안 유무 판별)
+2. `--try-session 0x02` / `--try-session 0x05` (전제조건이 시동상태였나)
+3. 0x02 열리면 `--request-seed 0x02`
+→ 결과로 A/B 확정. B면 마스터/커뮤니티 or 펌웨어RE, A면 계속 크랙.
+
+**참고**: 만도 리버스는 다수 유저·다수 차량·다수 로그의 집단작업이었음. 개인+단일차량은 불리하나 불가능은 아님. 단 **enable 단계에서 막혀 있어(트랙이 안 흐름) 포맷 해독으로 넘어가지도 못하는** 상태가 핵심 병목.
+
+---
+
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
 - `SelectedCar = HYUNDAI_CASPER_EV`, `$$$CAMERA_SCC`
 - `$$$OenpilotLongitudinalControl = True, CAMERA_SCC(8) or RadarTracks0` ← EnableRadarTracks=0, 롱컨은 CAMERA_SCC로 켜짐

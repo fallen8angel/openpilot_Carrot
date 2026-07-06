@@ -8,7 +8,7 @@ USE AT YOUR OWN RISK: touches a safety-critical radar (AEB/FCW)."""
 import sys
 import argparse
 from subprocess import check_output, CalledProcessError
-from opendbc.car.uds import UdsClient, SESSION_TYPE, NegativeResponseError
+from opendbc.car.uds import UdsClient, SESSION_TYPE, ACCESS_TYPE, NegativeResponseError
 from opendbc.car.structs import CarParams
 from panda.python import Panda
 
@@ -84,6 +84,28 @@ def scan_sessions(uds):
           "or if only 0x01/0x03 -> config write likely locked behind security/unknown session.")
 
 
+def request_seed(uds, session):
+    # Is config-write locked behind SecurityAccess? Enter a session, ask for a seed.
+    #  seed returned      -> radar IS security-gated (need key algorithm = firmware RE)
+    #  0x7F/0x31/0x12     -> no security in this session (try another) / not supported
+    #  0x22               -> preconditions unmet (maybe just ignition state)
+    print(f"\n[SECURITY-ACCESS PROBE] session 0x{session:02x}, requestSeed level 1 (0x27 01)")
+    try:
+        uds.diagnostic_session_control(session)
+        print(f"  entered session 0x{session:02x}")
+    except NegativeResponseError as e:
+        print(f"  cannot enter session 0x{session:02x}: {nrc(e)} (so cannot probe seed here)")
+        return
+    try:
+        seed = uds.security_access(ACCESS_TYPE.REQUEST_SEED)
+        nz = any(seed)
+        print(f"  SEED = 0x{seed.hex()} (len {len(seed)}) -> radar IS security-gated"
+              f"{' (all-zero = already unlocked!)' if not nz else '; need seed->key algorithm'}")
+    except NegativeResponseError as e:
+        print(f"  requestSeed rejected: {nrc(e)}")
+        print("  0x7F=security in another session | 0x31/0x12=no security here | 0x22=preconditions")
+
+
 def try_session(uds, st):
     print(f"\n[TRY SESSION 0x{st:02x}]")
     try:
@@ -134,11 +156,13 @@ if __name__ == "__main__":
     p.add_argument("--scan-sessions", action="store_true", dest="scan_sessions")
     p.add_argument("--try-session", metavar="HH", dest="try_session",
                    help="attempt to enter one session, e.g. --try-session 0x02")
+    p.add_argument("--request-seed", metavar="HH", dest="request_seed",
+                   help="probe SecurityAccess seed in given session, e.g. --request-seed 0x03")
     p.add_argument("--write", nargs=2, metavar=("DID", "HEX"))
     p.add_argument("--session", default="0x03", help="session for --write (default 0x03)")
     p.add_argument("--bus", type=int, default=2)
     a = p.parse_args()
-    if not a.read and not a.write and not a.scan_sessions and not a.try_session:
+    if not any([a.read, a.write, a.scan_sessions, a.try_session, a.request_seed]):
         p.print_help()
         sys.exit(1)
     try:
@@ -163,5 +187,7 @@ if __name__ == "__main__":
         scan_sessions(uds)
     if a.try_session:
         try_session(uds, int(a.try_session, 16))
+    if a.request_seed:
+        request_seed(uds, int(a.request_seed, 16))
     if a.write:
         do_write(uds, int(a.write[0], 16), bytes.fromhex(a.write[1]), a.bus, int(a.session, 16))
