@@ -113,6 +113,35 @@ def _to_default(uds):
         pass
 
 
+def scan_security(uds, session):
+    # write in 0x05 needs SecurityAccess but level 1 (0x27 01) is subFunctionNotSupported.
+    # Scan all requestSeed sub-functions (odd) to find which level the radar uses.
+    # requestSeed is read-only (no key sent) -> does not trip the failed-attempt counter.
+    print(f"\n[SECURITY-LEVEL SCAN] session 0x{session:02x} (requestSeed 0x27 01..7F odd)")
+    try:
+        uds.diagnostic_session_control(session)
+        print(f"  entered session 0x{session:02x}")
+    except NegativeResponseError as e:
+        print(f"  cannot enter session 0x{session:02x}: {nrc(e)} (abort)")
+        return
+    found = False
+    for lvl in range(0x01, 0x80, 2):
+        try:
+            seed = uds.security_access(lvl)
+            found = True
+            allzero = not any(seed)
+            print(f"  level 0x{lvl:02x}: SEED = 0x{seed.hex()} (len {len(seed)})"
+                  f"{'  <-- ALL ZERO = already unlocked' if allzero else '  <-- USE THIS LEVEL'}")
+        except NegativeResponseError as e:
+            code = getattr(e, "error_code", None)
+            if code not in (0x11, 0x12):
+                print(f"  level 0x{lvl:02x}: {nrc(e)}")
+        except Exception as ex:
+            print(f"  level 0x{lvl:02x}: no response ({type(ex).__name__})")
+    if not found:
+        print("  no requestSeed level returned a seed here.")
+
+
 def try_session(uds, st):
     print(f"\n[TRY SESSION 0x{st:02x}]")
     # (1) direct from default session
@@ -187,12 +216,14 @@ if __name__ == "__main__":
     p.add_argument("--try-session", metavar="HH", dest="try_session",
                    help="attempt to enter one session, e.g. --try-session 0x02")
     p.add_argument("--request-seed", metavar="HH", dest="request_seed",
-                   help="probe SecurityAccess seed in given session, e.g. --request-seed 0x03")
+                   help="probe SecurityAccess seed (level 1) in given session, e.g. --request-seed 0x03")
+    p.add_argument("--scan-security", metavar="HH", dest="scan_security",
+                   help="scan all requestSeed levels in a session, e.g. --scan-security 0x05")
     p.add_argument("--write", nargs=2, metavar=("DID", "HEX"))
     p.add_argument("--session", default="0x03", help="session for --write (default 0x03)")
     p.add_argument("--bus", type=int, default=2)
     a = p.parse_args()
-    if not any([a.read, a.write, a.scan_sessions, a.try_session, a.request_seed]):
+    if not any([a.read, a.write, a.scan_sessions, a.try_session, a.request_seed, a.scan_security]):
         p.print_help()
         sys.exit(1)
     try:
@@ -219,5 +250,7 @@ if __name__ == "__main__":
         try_session(uds, int(a.try_session, 16))
     if a.request_seed:
         request_seed(uds, int(a.request_seed, 16))
+    if a.scan_security:
+        scan_security(uds, int(a.scan_security, 16))
     if a.write:
         do_write(uds, int(a.write[0], 16), bytes.fromhex(a.write[1]), a.bus, int(a.session, 16))

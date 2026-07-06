@@ -329,6 +329,49 @@ write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
 → `do_write` 수정: **읽기는 0x03, 쓰기는 0x02, 읽기백은 0x03**. (0x0126 기본값=00 이미 확인됨, revert=00)
 → 보안 없음 확정이라 write 성공 가능성 높음. 다음: git pull 후 재실행.
 
+### 2026-07-06 (10) — write 서비스(0x2E)가 0x02에서도 미지원
+```
+--write 0x0126 --session 0x02 → write REJECTED: NACK 0x7f svcNotSupportedInSession
+```
+**서비스별 세션 지원 현황:**
+| 서비스 | 0x03 확장 | 0x02 프로그래밍 |
+|--------|:---:|:---:|
+| 읽기 0x22 | ✅ | ❌ 0x7F |
+| 쓰기 0x2E | ❌ 0x7F | ❌ 0x7F |
+
+→ **WriteDataByIdentifier(0x2E)가 두 세션 다 미지원.** 남은 세션 0x05 미시도.
+가설: (a) 0x05가 write 세션이거나, (b) MRR-35 config가 0x2E가 아닌 **RoutineControl(0x31)/IOControl(0x2F)** 로 바뀌거나, (c) 이 config DID들이 read-only(=enable 메커니즘 자체가 다름/없음).
+다음: `--write ... --session 0x05` 시도 → 안 되면 0x2E 경로 배제, 루틴/IO 탐색 or 마스터.
+
+### 2026-07-06 (11) — 🎯 write 세션 = 0x05, 보안잠금 확정
+```
+--write 0x0126 --session 0x05 → NACK 0x33 securityAccessDenied
+```
+**write 서비스(0x2E) 세션별 최종:**
+| 세션 | 0x2E write |
+|------|-----------|
+| 0x03 확장 | 0x7F 서비스없음 |
+| 0x02 프로그래밍 | 0x7F 서비스없음 |
+| **0x05 (공급자?)** | **0x33 = 서비스 있음, 보안키 필요** ✅ |
+
+**결론: write 경로 = 세션 0x05 + SecurityAccess(seed/key).** = 시나리오 (B) 확정.
+- 남은 관문: 0x05의 seed 받아서(→ `--request-seed 0x05`) key 계산. key 알고리즘은 제조사 것.
+- 현대 ECU 일부는 seed/key 알고리즘이 커뮤니티에 알려져 있음(약한/표준 알고리즘) → 희망 여지. seed 길이 보고 판단.
+다음: `--request-seed 0x05 --bus 2` (ON-not-READY) → seed 확인.
+
+### 2026-07-06 (12) — 보안 레벨이 level 1 아님 + 온라인 리드
+```
+--request-seed 0x05 (level 1, 0x27 01) → NACK 0x12 subFunctionNotSupported
+```
+- write는 0x33(보안필요)인데 level 1 seed는 미지원 = **보안이 level 1이 아닌 다른 레벨(0x03/0x05/…/manufacturer)**.
+- **신규**: `--scan-security 0x05` — requestSeed 홀수 레벨(0x01~0x7F) 전수 스캔해 seed 반환 레벨 탐지. (requestSeed는 키 안 보내니 락아웃 카운터 안 올림 = 안전)
+
+**온라인 리드 (사용자 방침: 우리+구글로):**
+- **UnlockECU** = Bosch/**Continental**/Delphi/Daimler 등 seed-key 언락 툴(무료, 독점DLL 불필요). MRR-35=콘티넨탈이라 **직접 후보**. seed 받은 뒤 매칭 시도.
+- commaai/openpilot #1294(Hyundai radar bounty), #1346(radar interface) — 과거 만도 리버스 맥락.
+
+다음: `--scan-security 0x05 --bus 2` (ON-not-READY) → 어느 레벨이 seed 주는지 + seed 값/길이 확보 → 그걸로 UnlockECU/알고리즘 매칭.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
