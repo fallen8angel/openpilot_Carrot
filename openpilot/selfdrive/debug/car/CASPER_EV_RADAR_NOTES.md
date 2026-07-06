@@ -138,6 +138,72 @@ ACC_ObjRelSpd : bit44 len12 (x0.1, off -170)
 
 ---
 
+## 8. 테스트 이력
+
+### 2026-07-06 — RadarTracks=3 켠 뒤 첫 실측 (SEG0 시동직후 / SEG9 정차 10분)
+로그: `20260706/00001d60--3983e5d700--0`(63s), `--9`(603s). 대조군 `00001d5e--…--0`.
+
+**결과: 레이더는 살아있고 UDS에 응답하나, Carrot의 만도식 enable이 세션 단계에서 거부됨 → 트랙 안 나옴.**
+
+1. **레이더 FW 확인** (t≈1.5s, `62 f100` 읽기 성공, ASCII):
+   `AX_ RDR ---- 1.00 1.00 99110-GX000` → MRR-35 정상 응답. 레이더 UDS 통신 살아있음.
+2. **enable_radar_tracks() 실행됨** (t≈13.8s, sendcan bus 2 → 0x7d0):
+   `02 10 07` = **DiagnosticSessionControl, 세션타입 0x07(만도 전용 확장세션)** 요청.
+3. **레이더가 거부** (0x7d8 응답): `03 7f 10 12`
+   = **Negative Response, svc=0x10, NRC=0x12 (sub-functionNotSupported)**
+   → **MRR-35는 세션타입 0x07을 지원 안 함.**
+4. 세션이 거부돼서 뒤따르는 config write(`2e 01 42 …`)는 **아예 전송조차 안 됨** → 트랙 출력 안 켜짐.
+5. `casper_radar_scan.py` diff: 켠 로그에 **새 트랙 주소 블록 0건** (UDS 응답 주소만 추가). SEG9(정차 10분)도 새 주소 0.
+   - (참고: t=2~3s의 `7f 22 31`은 FW 핑거프린팅 중 미지원 DID 읽기 → 정상, 무관)
+
+**해석 / 다음 방향** (데드엔드 아님):
+- 레이더가 UDS로 말은 하는데 **세션 0x07만 거부**. = 만도 방식이 콘티넨탈엔 안 맞을 뿐, 다른 세션/DID가 있을 수 있음.
+- 다음: openpilot 끈 상태로
+  `python hyundai_enable_radar_points.py --read-only --scan-config-dids --bus 2`
+  (이 스크립트는 **확장세션 0x03**을 시도하고 DID `0x0100~0x01ff`를 스캔 → MRR-35가 config 접근에 쓰는 세션/DID 발견 목적). bus 2 먼저(레이더가 카메라버스에서 응답 중), 안 되면 `--bus 0`.
+- ⚠️ 현재 `hyundai_enable_radar_points.py`의 write 경로는 세션 `0x07` 하드코딩 → MRR-35엔 그대로 못 씀. read-only 스캔으로 먼저 올바른 세션/DID부터 찾아야 함.
+
+### 2026-07-06 (2) — `hyundai_enable_radar_points.py --read-only --scan-config-dids --bus 2`
+차에서 openpilot 정지 후 실행. 레이더 FW: `AX__ RDR -----  1.00 1.00 99110-GX000`.
+
+**결정적: MRR-35엔 만도 enable DID `0x0142`가 없음.**
+- `0x0142` 읽기: 기본세션·확장세션 **둘 다 실패** (`request out of range` = NRC 0x31 = DID 미존재).
+- → 만도식(세션0x07 + DID 0x0142)은 프로토콜상 **완전 불가** 확정.
+
+**읽힌 config DID 9개 (확장세션, 기본값 — 되돌림 기준이니 보존):**
+| DID | 값(hex) | 바이트수 | 메모(추정) |
+|-----|---------|---------|-----------|
+| 0x0121 | `4b` ('K') | 1 | 마켓/변형 코드? (K=Korea/Kia?) |
+| 0x0123 | `02 7e 00 1e` | 4 | config/version 워드? |
+| 0x0125 | `01` | 1 | 플래그 |
+| 0x0126 | `00` | 1 | 플래그 (0 = 비활성?) ← enable 후보? |
+| 0x0127 | `fd` | 1 | 파라미터(253/-3) |
+| 0x0128 | `03` | 1 | 파라미터 |
+| 0x0129 | `00` | 1 | 플래그 (0 = 비활성?) ← enable 후보? |
+| 0x0131 | `1e 1e` | 2 | 파라미터 쌍(30,30) |
+| 0x0171 | `91` | 1 | 파라미터 |
+
+**해석 (객관적):**
+- 레이더는 확장세션(0x03)에서 이 DID들을 읽어줌 = config 공간은 있음.
+- 그러나 **어느 DID가 "트랙/포인트 출력 ON"인지 매핑 정보가 없음.** 만도처럼 알려진 값이 아님.
+- 리스크: (a) config write에 **SecurityAccess(0x27 seed/key) 잠금**이 걸려있을 가능성 큼 → 키 없으면 write NACK. (b) 안전장치(AEB/FCW) 영향 가능. (c) 애초에 MRR-35가 **원시 트랙 출력 모드를 아예 미지원**할 수도 있음.
+- → **여기가 진짜 난관.** 만도식 배제는 확정됐고, 다음은 "외부 지식(콘티넨탈/MRR-35 트랙 enable 방법)" 또는 "위험한 시행착오 write"가 필요.
+
+**결정된 방향 (2026-07-06, 사용자): 증거 조금 더 수집 → 바로 위험 write 테스트.**
+
+도구: `casper_radar_probe.py` (신규, 이 폴더)
+- `--read --bus 2` : 식별 DID(0xF180~F19F) + config DID(0x0100~01FF) 덤프 (안전)
+- `--write 0xNNNN HH --bus 2` : config DID 1개 write. **먼저 현재값 읽어 revert 명령 출력** 후 `WRITE` 입력 확인. (위험)
+
+**write 실험 순서 (currently-00 단일바이트 플래그 우선 = enable 가능성 高, 값 손상 위험 低):**
+1. `--write 0x0126 01` → 재시동 → 부팅(RadarTracks=3) → 로그 → `casper_radar_scan.py <정상> <신규>`로 트랙 블록 확인 → 없으면 `--write 0x0126 00` 복구
+2. 안 되면 `0x0129`로 반복
+3. NACK 0x33(securityAccessDenied) 뜨면 → **SecurityAccess 키 필요 = 우리 선에서 벽.** 마스터/커뮤니티 문의로 전환.
+
+⚠️ 안전장치(AEB/FCW) 영향 위험. 정차·안전장소, revert 명령 보관, 후 제동 테스트 필수.
+
+---
+
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
 - `SelectedCar = HYUNDAI_CASPER_EV`, `$$$CAMERA_SCC`
 - `$$$OenpilotLongitudinalControl = True, CAMERA_SCC(8) or RadarTracks0` ← EnableRadarTracks=0, 롱컨은 CAMERA_SCC로 켜짐
