@@ -113,6 +113,90 @@ def _to_default(uds):
         pass
 
 
+# --- Continental "DaimlerStandardSecurity" seed->key (ported from jglim/UnlockECU) ---
+# 8-byte seed -> 4-byte key. key = (i1 ^ i2 ^ cryptoKey) & 0xFFFFFFFF.
+# EARS167 (Continental radar) = RefG with cryptoKey B3687D8B; whole B3687D8X family are radars.
+M32 = 0xFFFFFFFF
+# ranked candidate cryptoKeys (Continental radar family first)
+DEFAULT_KEYS = ["B3687D8B", "B3687D83", "B3687D87", "B3687D89", "B3687D8D", "B3687D8F",
+                "DEDE947A", "FFFFFFFF", "CEF734C3", "8B014327", "2B972AC5", "EA85C49B"]
+
+
+def daimler_key(seed, cryptokey, variant="refG"):
+    a = int.from_bytes(seed[0:4], "big")
+    b = int.from_bytes(seed[4:8], "big")
+    K = cryptokey & M32
+    if variant == "refG":
+        i1 = (3040238857 * a + 2094854071) & M32
+        i2 = (4126034881 * b + 3555108353) & M32
+    else:  # base: glibc LCG constants
+        i1 = (1103515245 * a + 12345) & M32
+        i2 = (1103515245 * b + 12345) & M32
+    return ((i1 ^ i2 ^ K) & M32).to_bytes(4, "big")
+
+
+def do_unlock(uds, session, keys, variant, level=0x11):
+    """Enter session, try candidate cryptoKeys. On success LEAVE session unlocked
+    (no session switch) and return the winning key; else None. Stops on lockout."""
+    print(f"\n[UNLOCK] session 0x{session:02x} level 0x{level:02x} variant={variant} "
+          f"({len(keys)} candidate keys)")
+    try:
+        uds.diagnostic_session_control(session)
+    except NegativeResponseError as e:
+        print(f"  cannot enter session 0x{session:02x}: {nrc(e)}")
+        return None
+    def lockout(remaining):
+        print(f"  >>> LOCKOUT (too many attempts). Power-cycle car, rerun with:")
+        print(f"      --keys {','.join(remaining)}")
+
+    for i, ck_hex in enumerate(keys):
+        ck = int(ck_hex, 16)
+        try:
+            seed = uds.security_access(level)
+        except NegativeResponseError as e:
+            code = getattr(e, "error_code", None)
+            print(f"  requestSeed: {nrc(e)}")
+            if code in (0x36, 0x37):
+                lockout(keys[i:])
+                return None
+            try:  # recover sequence by re-entering session
+                uds.diagnostic_session_control(session)
+                seed = uds.security_access(level)
+            except NegativeResponseError:
+                return None
+        if not any(seed):
+            print("  seed is all-zero -> already unlocked")
+            return "already"
+        key = daimler_key(seed, ck, variant)
+        try:
+            uds.security_access(level + 1, key)
+            print(f"  key {ck_hex}: seed={seed.hex()} -> key={key.hex()} -> *** UNLOCKED! ***")
+            return ck_hex
+        except NegativeResponseError as e:
+            code = getattr(e, "error_code", None)
+            print(f"  key {ck_hex}: seed={seed.hex()} key={key.hex()} -> {nrc(e)}")
+            if code in (0x36, 0x37):
+                lockout(keys[i + 1:])
+                return None
+    print("  no candidate cryptoKey unlocked.")
+    return None
+
+
+def do_enable(uds, keys, variant, did, value, session=0x05, level=0x11):
+    win = do_unlock(uds, session, keys, variant, level)  # leaves 0x05 unlocked on success
+    if not win:
+        print("  not unlocked -> aborting write.")
+        return
+    print(f"  (unlocked with {win}) writing DID 0x{did:04x} = 0x{value.hex()} in session 0x{session:02x}...")
+    try:
+        uds.write_data_by_identifier(did, value)  # same unlocked session, no switch!
+        print(f"  *** WRITE 0x{did:04x}=0x{value.hex()} POSITIVE RESPONSE! ***")
+        print("  NEXT: restart car (READY), boot openpilot (RadarTracks=3), record log, scan diff.")
+        print(f"  REVERT: --enable 0x{did:04x} 00 --bus <bus>  (writes back 00)")
+    except NegativeResponseError as e:
+        print(f"  write REJECTED: {nrc(e)}")
+
+
 def scan_security(uds, session):
     # write in 0x05 needs SecurityAccess but level 1 (0x27 01) is subFunctionNotSupported.
     # Scan all requestSeed sub-functions (odd) to find which level the radar uses.
@@ -219,11 +303,18 @@ if __name__ == "__main__":
                    help="probe SecurityAccess seed (level 1) in given session, e.g. --request-seed 0x03")
     p.add_argument("--scan-security", metavar="HH", dest="scan_security",
                    help="scan all requestSeed levels in a session, e.g. --scan-security 0x05")
+    p.add_argument("--unlock", action="store_true",
+                   help="try candidate cryptoKeys to unlock SecurityAccess (session 0x05 lvl 0x11)")
+    p.add_argument("--enable", nargs=2, metavar=("DID", "HEX"),
+                   help="unlock then write DID in the SAME session, e.g. --enable 0x0126 01")
+    p.add_argument("--keys", help="comma-separated candidate cryptoKeys (hex); default=radar family")
+    p.add_argument("--variant", default="refG", help="key algorithm variant: refG (default) or base")
     p.add_argument("--write", nargs=2, metavar=("DID", "HEX"))
     p.add_argument("--session", default="0x03", help="session for --write (default 0x03)")
     p.add_argument("--bus", type=int, default=2)
     a = p.parse_args()
-    if not any([a.read, a.write, a.scan_sessions, a.try_session, a.request_seed, a.scan_security]):
+    if not any([a.read, a.write, a.scan_sessions, a.try_session, a.request_seed, a.scan_security,
+                a.unlock, a.enable]):
         p.print_help()
         sys.exit(1)
     try:
@@ -252,5 +343,12 @@ if __name__ == "__main__":
         request_seed(uds, int(a.request_seed, 16))
     if a.scan_security:
         scan_security(uds, int(a.scan_security, 16))
+    keys = [k.strip() for k in a.keys.split(",")] if a.keys else DEFAULT_KEYS
+    unlock_session = 0x05  # SecurityAccess-gated write session on MRR-35
+    if a.unlock:
+        do_unlock(uds, unlock_session, keys, a.variant)
+    if a.enable:
+        do_enable(uds, keys, a.variant, int(a.enable[0], 16), bytes.fromhex(a.enable[1]),
+                  session=unlock_session)
     if a.write:
         do_write(uds, int(a.write[0], 16), bytes.fromhex(a.write[1]), a.bus, int(a.session, 16))

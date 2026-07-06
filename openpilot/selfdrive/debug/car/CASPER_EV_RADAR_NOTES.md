@@ -372,6 +372,54 @@ write REJECTED: NACK 0x7f = serviceNotSupportedInActiveSession
 
 다음: `--scan-security 0x05 --bus 2` (ON-not-READY) → 어느 레벨이 seed 주는지 + seed 값/길이 확보 → 그걸로 UnlockECU/알고리즘 매칭.
 
+### 2026-07-06 (13) — 🎯 SEED 확보! 보안 레벨 0x11
+```
+--scan-security 0x05 → level 0x11: SEED = 0xf2a22d7f9beff517 (len 8)
+                       level 0x15: NACK 0x24 requestSequenceError (0x11 seed 받은 뒤라 정상)
+```
+- **write 언락 = 세션 0x05 + SecurityAccess level 0x11**(requestSeed 0x27 11 / sendKey 0x27 12).
+- **seed = 8바이트(64비트).** key = f(seed), f는 미지의 알고리즘.
+- **남은 유일 관문 = seed→key 알고리즘.** (64비트라 브루트포스 불가 → 알고리즘 필요)
+
+**다음 확인:**
+1. **seed 고정 vs 랜덤**: `--scan-security 0x05` 여러 번 재실행해 0x11 seed 비교. 고정이면 큰 단순화.
+2. **알고리즘 조사(온라인)**: 콘티넨탈/현대 level 0x11 8바이트 seed-key. UnlockECU 콘티넨탈 지원목록.
+3. **펌웨어 RE 옵션**: ReadMemoryByAddress(0x23) 되는지 → 되면 덤프해서 key루틴 추출.
+
+### 2026-07-06 (14) — 🔑 알고리즘 후보 특정: DaimlerStandardSecurityAlgo (UnlockECU)
+- 우리 seed: `f2a22d7f9beff517` (8B), 레벨 0x11, 세션 0x05.
+- **UnlockECU db.json에서 8B seed + level 0x11 = 전부 `DaimlerStandardSecurityAlgoRefG`** (CCGW420, **EARS167(콘티넨탈 레이더)**, EPS_MFA2…, ESPC_167_11).
+- 알고리즘 특성: **seed 8B → key 4B**, 내부 변환 후 **private key와 XOR** (private key는 known seed+key 쌍으로 복원 가능). Ref변형(A~G…)마다 private key 상수 다름.
+- 가설: 콘티넨탈이 OEM간 보안 재사용 → **MRR-35도 DaimlerStandardSecurityAlgo 계열(아마 RefG)**.
+
+**공략 계획:**
+1. UnlockECU 소스에서 DaimlerStandardSecurityAlgo 변환 + Ref별 private key 상수 추출 → 파이썬 포팅(probe에 `--send-key`).
+2. seed로 key 계산 → level 0x12로 sendKey → 언락 시도.
+3. ⚠️ **틀린 key는 실패카운터 올림**(보통 3회→락아웃/딜레이). Ref 후보를 **가장 유력(RefG)부터** 소수만, 안 되면 전원 재투입 후 다음.
+4. 언락되면 → 0x05 세션서 `--write 0x0126 01` → 트랙 확인.
+
+**seed 고정/랜덤 확인 병행 중** (고정이면 계산·검증 훨씬 쉬움).
+
+### 2026-07-06 (15) — 🔓 알고리즘 포팅 완료 + 후보 6개로 좁힘
+UnlockECU 소스 확보(`DaimlerStandardSecurityAlgo.cs`, `...RefG.cs`). 알고리즘:
+```
+seedA=seed[0:4], seedB=seed[4:8] (big-endian u32)
+RefG:  i1 = 3040238857*seedA + 2094854071
+       i2 = 4126034881*seedB + 3555108353
+key = (i1 ^ i2 ^ cryptoKey) & 0xFFFFFFFF   # 4바이트, cryptoKey=ECU별 상수
+base:  kA=1103515245, kC=12345 (glibc LCG), i1=kA*A+kC, i2=kA*B+kC
+```
+**후보 cryptoKey (콘티넨탈 레이더 패밀리 = 최우선):** `B3687D8B`(EARS167 레이더 확정값), 형제 `B3687D83/87/89/8D/8F`, 그다음 `DEDE947A, FFFFFFFF, ...`.
+- db.json에 `B3687D8X` 패밀리가 통째로 있음 = 콘티넨탈 레이더 변형들 → **MRR-35도 이 중 하나 확률 높음.**
+
+**probe 신규 기능** (파이썬 포팅됨):
+- `--unlock` : 세션0x05·level0x11에서 후보 cryptoKey 순차 시도, 언락되는 키 탐지(write 안 함).
+- `--enable DID HEX` : 언락 성공 시 **같은 세션에서 바로 write** (예: `--enable 0x0126 01`).
+- `--keys a,b,c` 후보 지정, `--variant refG|base`. 락아웃 시 남은 키 출력.
+- ⚠️ 틀린 key는 실패카운터↑ → 보통 3회 후 lockout(0x36/0x37). 락아웃 뜨면 전원재투입 후 `--keys <남은키>`로 이어서.
+
+**다음(ON-not-READY, git pull 후):** `--enable 0x0126 01 --bus 2` → B3687D8B부터 시도. 언락+write POSITIVE 뜨면 재부팅→트랙 확인.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
