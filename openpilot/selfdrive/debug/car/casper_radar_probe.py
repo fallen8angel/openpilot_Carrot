@@ -146,8 +146,29 @@ def keygen_ic172(seed):
     return assembled + bytes([0x55, 0x45, 0x43, 0x55])  # + "UECU"
 
 
-KEYGENS = {"arrayreverse": keygen_arrayreverse, "ic172": keygen_ic172}
+def _swap_nibbles(b):
+    return bytes(((x << 4) | (x >> 4)) & 0xFF for x in b)
+
+
+# extra self-contained 8->8 transforms (no per-ECU secret) to brute a bit
+KEYGENS = {
+    "arrayreverse": keygen_arrayreverse,
+    "ic172": keygen_ic172,
+    "complement": lambda s: bytes(x ^ 0xFF for x in s),
+    "swaphalves": lambda s: s[4:8] + s[0:4],
+    "revcomplement": lambda s: bytes(x ^ 0xFF for x in reversed(s)),
+    "nibbleswap": _swap_nibbles,
+    "nibbleswap_rev": lambda s: _swap_nibbles(bytes(reversed(s))),
+    "rotl1": lambda s: s[1:] + s[:1],
+    "rotr1": lambda s: s[-1:] + s[:-1],
+    "add1": lambda s: bytes((x + 1) & 0xFF for x in s),
+    "sub1": lambda s: bytes((x - 1) & 0xFF for x in s),
+    "xor55": lambda s: bytes(x ^ 0x55 for x in s),
+    "xorAA": lambda s: bytes(x ^ 0xAA for x in s),
+}
 DEFAULT_ALGOS = ["arrayreverse", "ic172"]
+SIMPLE_ALGOS = ["complement", "revcomplement", "swaphalves", "nibbleswap",
+                "nibbleswap_rev", "rotl1", "rotr1", "add1", "sub1", "xor55", "xorAA"]
 
 
 def do_unlock(uds, session, algos, level=0x11):

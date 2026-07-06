@@ -444,6 +444,21 @@ probe 스크립트 8바이트 버전 반영+문법검증+포팅 자체테스트 
 **다음(ON-not-READY, git pull 후):** `--enable 0x0126 01 --bus 2` → arrayreverse→ic172 순 시도.
 - 둘 다 0x35(invalidKey)면 자기완결형 아님 → VDO(콘티넨탈, 후보 K 상수들) 포팅으로.
 
+### 2026-07-07 (2) — arrayreverse/ic172 실패 → UnlockECU 소진
+```
+arrayreverse → 0x35 invalidKey / ic172 → 0x35 invalidKey  (길이는 맞음, 알고리즘 다름)
+```
+- db.json 8→8 전수조사: **자기완결형(상수無)은 ArrayReverse·IC172 딱 2개** = 둘 다 실패.
+- 나머지 8→8은 VDO(K 149후보, 전부 벤츠)·IC204(Salt 336, 벤츠) = **현대 상수 없음, 브루트포스 비현실적**(락아웃).
+- 레이더 전용 알고리즘(LRR3/BoschConti/ORC166)은 4→4·2→2·8→4라 **8→8 불일치**.
+- ⇒ **MRR-35 알고리즘은 UnlockECU(벤츠 DB)에 없음.** 온라인 검색(sunnypilot 등)도 만도 방식뿐.
+
+**남은 것:**
+1. (저비용) 상수 없는 **단순 변환 배치** 시도: complement/revcomplement/swaphalves/nibbleswap/rot/add/xor 등. probe에 `SIMPLE_ALGOS` 추가. 확률 낮지만 공짜. `--algos complement,revcomplement,swaphalves,nibbleswap,rotl1`
+2. (고비용, 확정) **레이더 펌웨어 덤프 + 디스어셈블**로 seed→key 루틴 추출. UDS read(0x23)는 보안게이트라 순환 → **물리 플래시 덤프** 필요.
+
+락아웃: 오늘 2회(0x35) 후에도 안 걸림 → 배치로 몇 개씩 시도 가능. 락아웃 뜨면 전원재투입+`--algos <남은것>`.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
