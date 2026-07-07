@@ -459,6 +459,39 @@ arrayreverse → 0x35 invalidKey / ic172 → 0x35 invalidKey  (길이는 맞음,
 
 락아웃: 오늘 2회(0x35) 후에도 안 걸림 → 배치로 몇 개씩 시도 가능. 락아웃 뜨면 전원재투입+`--algos <남은것>`.
 
+### 2026-07-07 (3) — 락아웃 실측: 시도당 2회, 차 전원재투입으로만 리셋
+```
+arrayreverse(0x35) + ic172(0x35) + complement → 0x36 exceedNumberOfAttempts (LOCKOUT)
+```
+- **차 1회 전원사이클당 유효 시도 = 2회** (3번째는 0x36 차단). **콤마 재부팅으론 리셋 안 됨**(카운터는 레이더 NVM) → **차를 완전히 OFF→ON** 해야 리셋.
+- complement은 실제 테스트 안 됨(락아웃에 막힘). 남은 단순변환 11개 = **~6 전원사이클** 필요.
+- **판단**: 단순변환 확률 낮음(현대 콘티 레이더가 트리비얼 변환일 리 적음) + 6사이클 수작업 = 비용 대비 낮음. 자기완결형 알고리즘 다 소진되면 → **펌웨어 물리덤프 RE**가 유일한 현실 경로(하드웨어 작업, 난이도 높음).
+
+### 2026-07-07 (4) — 광범위 온라인 조사 결과 (알고리즘 공개 안 됨 확정)
+검색한 곳 + 결론:
+- **UnlockECU**(jglim): 8→8 자기완결형 2개뿐(ArrayReverse/IC172, 실패). 나머지 벤츠 전용 상수. **소진.**
+- **sunnypilot / BrandonHacks / Circuit-Pro / 한국포크(apilot·openpilotkr·carrot)**: 전부 **만도 0x0142 방식만**. 콘티넨탈/캐스퍼 레이더 언락 없음.
+- **GDS/KDS**(현대·기아 순정 진단기): 레이더 seed-key **내장**. 딜러락(SDRM 인증). 클론 존재(알리 10~30만원). → **진단 언락 순간 CAN 캡처하면 (seed,key)쌍 확보** = 최유력 우회.
+- **optskug/docs**: 토요타(TSK) 전용, 현대 무관.
+- **펌웨어 RE 경로**: Continental **SBOOT(공급자 부트로더)** 에 제조/수리용 백도어 存(bri3d의 Simos18_SBOOT = VW 콘티 엔진ECU seed-key bypass 선례). 레이더도 유사 가능성 but 별도 RE 필요. 툴: Ghidra + Infineon **Tricore**(10.1+ 네이티브 지원) or Renesas.
+- **MHH Auto "Seed/Key Algo All Brands"** 스레드(로그인월) — 현대 레이더 알고리즘 있을 수도, 접근 불가.
+
+**결론: MRR-35 seed-key 알고리즘은 공개처에 없음.** 현실 경로 = ① GDS 캡처(장비 허들) / ② 단순변환(~5%) / ③ 펌웨어 RE(고난도). 참고자료: bri3d/Simos18_SBOOT, ghidra.courses, reverseengineer.net(Tricore seed-key).
+
+### 2026-07-07 (5) — 🔑 sunnypilot 커뮤니티 스레드 = 우리 상황 확증 (미해결 프론티어)
+스레드 "📡 Radar Tracks Branch — HKG" (community.sunnypilot.ai/t/3268, 174글, ~2026-07):
+- **MRR30 = 메시지 0x210~0x21F, MRR35 = 0x3A5~0x3C4** (라디오 메시지로 그룹 재분류 중). Carrot의 그룹1/2와 일치.
+- **HDA2/CAN-FD MRR35 차들(코나EV SX2, EV6 2025 99110-XG500, 니로2024)은 트랙을 기본 방송** → 스크립트 불필요.
+- **`bryangerlach`: 2024 Kia Telluride NON-HDA2, MRR35 → "radar tracks are not available over CAN"** (HDA2 버전만 트랙 나옴). enable_radar_tracks.py 시도 중, 미해결. **= 우리 캐스퍼(클래식CAN+CAMERA_SCC)와 동일 문제!**
+- 유지관리자 `First`: "MRR35 should display tracks without the script afaik" — **HDA2 기준 인식. 클래식CAN MRR35가 방송 안 하는 케이스는 커뮤니티도 미해결.**
+- Casper 지문 bus0에 0x3A5 없음(스캔 확인) → 방송 안 함 확정.
+
+**의미:**
+1. **우리 상황은 공개적으로 미해결된 엣지케이스** = 클래식CAN(non-HDA2) MRR35 트랙 enable. 동일 문제 동지(Telluride non-HDA2) 존재.
+2. **우리가 오히려 앞서 있음** — 세션0x05·레벨0x11·8B키·SecurityAccess까지 규명. 커뮤니티는 여기까지 못 옴.
+3. **MRR35 트랙 포맷(0x3A5)은 이미 파싱됨**(그룹2) → **방송만 켜면 파싱은 해결.**
+4. 협업 여지(SecurityAccess 발견 공유) + GDS 캡처 경로 유효.
+
 ---
 
 ## 7. 로그 관찰 요약 (부팅 로그 참고)
@@ -467,3 +500,192 @@ arrayreverse → 0x35 invalidKey / ic172 → 0x35 invalidKey  (길이는 맞음,
 - `DBC: hyundai_kia_generic`, `ECAN=0` (클래식 CAN)
 - CanFD 프린트(`ACAN=`, `Radar Group X detected`) 전무 → CANFD 아님 확정
 - 부팅 시 `iso-tp query bad response`/`isotp rx invalid` = FW 조회 실패(레이더트랙과 별개)
+
+---
+
+# 부록 A — 확정된 기술 사실 총정리 (2026-07-07 기준)
+
+## A-1. 하드웨어/차량
+| 항목 | 값 |
+|------|-----|
+| 차량 | Hyundai Casper EV 2024 (`HYUNDAI_CASPER_EV`, 플랫폼 AX EV), VIN KMHB3511FSW032357 |
+| 아키텍처 | **클래식 CAN + CAMERA_SCC** (non-HDA2, CAN-FD 아님) |
+| 전방 레이더 | 99110-GX000 / **Continental MRR-35** / FW `AX__ RDR ----- 1.00 1.00 99110-GX000` |
+| 레이더 제조일 | 2025-03-13 (DID 0xF18B), 시리얼 `25C13CA5472`(F18C), 시스템명 `FR_RDR`(F197) |
+| 차량 플래그 | `CAMERA_SCC \| CHECKSUM_CRC8 \| EV` (MANDO_RADAR·RADAR_GROUP 없음) |
+
+## A-2. 레이더 종류 ↔ 트랙 메시지 주소 (커뮤니티 확정)
+| 레이더 | 트랙 메시지 | Carrot 그룹 | 방송 방식 |
+|--------|-----------|-------------|-----------|
+| MRR30 | **0x210~0x21F** | 그룹1 | HDA2/CAN-FD 기본 방송 |
+| MRR35 | **0x3A5~0x3C4** | 그룹2 | HDA2/CAN-FD 기본 방송 |
+| MRR35 (non-HDA2 클래식CAN) | (동일 0x3A5) | 그룹2 | **방송 안 함 → enable 필요** ← 캐스퍼 |
+- Casper 지문 bus0/2에 0x3A5 블록 없음(정차·주행·시동직후 로그 전부 확인). = 방송 안 함 확정.
+- **핵심: 트랙 포맷(0x3A5)은 이미 파싱됨. 문제는 오직 "레이더가 방송을 시작하게 만들기"(=enable) 하나.**
+
+## A-3. UDS 리버스 맵 (레이더 0x7d0, 응답 0x7d8, bus 2)
+전제조건: **차 ON-not-READY**(시동버튼 2번, 브레이크 X) + openpilot 정지. READY면 프로그래밍 세션 진입 불가(0x22).
+
+| 항목 | 값/결과 |
+|------|---------|
+| 진단 세션 | 0x01(default)✅, 0x03(extended)✅, **0x02(programming)✅**, **0x05(공급자?)✅** — 0x02/0x05는 ON-not-READY서만 |
+| ReadDataByIdentifier(0x22) | **0x03에서만** 가능 (0x02선 0x7F) |
+| config DID 읽힘(0x03) | 0x0121=4b, 0x0123=027e001e, 0x0125=01, **0x0126=00**, 0x0127=fd, 0x0128=03, **0x0129=00**, 0x0131=1e1e, 0x0171=90~91(동적값) |
+| WriteDataByIdentifier(0x2E) | 0x03✗(0x7F), 0x02✗(0x7F), **0x05 → 0x33(보안필요)** ⇒ **write 경로 = 세션0x05 + SecurityAccess** |
+| 만도 방식(세션0x07+DID0x0142) | 세션0x07 거부(NRC12), DID0x0142 없음 = **완전 불가** |
+| SecurityAccess 레벨 | 0x03/0x02엔 없음. **세션0x05의 level 0x11**(requestSeed 0x27 11 / sendKey 0x27 12) |
+| seed | **8바이트, 랜덤**(매 요청 변경). 예: `f2a22d7f9beff517`, `f60d27e706304ba1` |
+| key 길이 | **8바이트** (probe-keylen: len8만 0x35, 나머지 0x13) |
+| 락아웃 | 틀린 key(0x35) **누적 2회 후 3번째 차단(0x36)**. **차 전원 OFF→ON으로만 리셋**(콤마 재부팅 무효) |
+
+## A-4. 시도해서 배제된 key 알고리즘 (전부 8→8 아니거나 값 불일치)
+- Daimler RefG/base (8→**4**B): 길이 불일치(0x13). 후보 cryptoKey 12개(B3687D8X 패밀리 등) 전부 0x13.
+- **ArrayReverse**(seed 뒤집기, 8→8): 0x35 invalidKey (길이 맞음, 값 틀림)
+- **IC172Algo1**(하드코딩 풀, 8→8): 0x35 invalidKey
+- 단순 complement: 락아웃에 막혀 미검증 (남은 단순변환 미시도)
+
+## A-5. 남은 미검증 (저비용)
+- 단순 자기완결형 변환: revcomplement, swaphalves, nibbleswap, nibbleswap_rev, rotl1, rotr1, add1, sub1, xor55, xorAA (probe `SIMPLE_ALGOS`). 확률 ~5%, 차 전원사이클당 2개씩.
+
+---
+
+# 부록 B — 공략 경로 총정리 (2026-07, 모든 방법)
+
+| # | 방법 | 원리 | 필요한 것 | 승산 | 난이도 |
+|---|------|------|----------|------|--------|
+| 1 | **GDS/KDS 진단 언락 캡처** | 순정 진단기가 레이더 언락 시 (seed,정답key) CAN에 흐름 → 캡처해 알고리즘/상수 역산 | GDS/KDS(순정 or 클론 10~30만원) + CAN 로깅 | **높음** | 중(장비 확보) |
+| 2 | **단순변환 브루트** | 상수 없는 8→8 변환 대입 | 차 전원사이클(2개/회) | ~5% | 하(공짜) |
+| 3 | **VDO/IC204 상수 브루트** | UnlockECU 벤츠 상수 대입 | 149·336개 = 전원사이클 수십~수백 | 매우 낮음(벤츠 상수) | 하지만 비현실적 |
+| 4 | **펌웨어 물리 덤프 + Ghidra RE** | 레이더 분해→플래시/JTAG 덤프→Tricore/Renesas 디스어셈블로 seed→key 루틴 추출 | 레이더 분해, 프로그래머, Ghidra | 확정적 | 매우 높음(HW) |
+| 5 | **폴트 인젝션/전압 글리칭** | 보안검사 순간 전압 글리치로 검사 스킵 or 펌웨어 덤프 (알고리즘 불필요) | 글리칭 장비(저가 가능), 타이밍 | 중(연구입증됨) | 높음(HW) |
+| 6 | **커뮤니티 협업** | SecurityAccess 발견 공유 → GDS 가진 사람이 캡처 (동일문제: Telluride non-HDA2) | sunnypilot 스레드/디스코드 공개 | 중 | 하 |
+| 7 | **런타임 트리거 스푸핑**(가설) | HDA2가 레이더에 보내는 "방송 시작" 메시지가 있다면 그걸 재현 | HDA2 MRR35 로그 대조 분석 | 미검증 | 중 |
+
+> **주의**: config write가 SecurityAccess(영구 config) 뒤에 있다는 사실은 "런타임 트리거(7)"보다 "영구 config write(1·4·5로 언락)" 쪽을 시사. 단 7도 완전 배제는 아님(HDA2 로그 대조로 검증 가능).
+
+---
+
+# 부록 C — 폴트 인젝션 / 전압 글리칭 (방법 5 상세)
+
+- 원리: ECU가 UDS 보안검사(key 비교)나 부트 시 **정확한 순간에 공급전압을 순간 강하(glitch)** 시켜 명령 하나를 건너뛰게 만듦 → 보안검사 우회 or 디버그/펌웨어 읽기 잠금 해제.
+- **알고리즘/키를 몰라도** 통함 (검사 자체를 스킵). 저가 툴(ChipWhisperer 등)로 입증됨.
+- CAN 기반 트리거: UDS 요청의 마지막 ISO-TP 프레임 직후~응답 직전에 글리치 타이밍.
+- 참고: "Three Glitches to Rule One Car"(ACM AsiaCCS 2025), Troopers23 "Fault Injection on Secure Automotive Bootloaders", Riscure "Fault Injection on Automotive Diagnosis Protocols".
+- 리스크: 레이더 손상 가능, 하드웨어·전문성 요구. 캐스퍼 레이더 칩셋(Tricore/Renesas 추정) 특정 필요.
+
+---
+
+# 부록 D — 참고 링크 총정리
+- UnlockECU (오픈소스 seed-key): https://github.com/jglim/UnlockECU (db.json, DaimlerStandardSecurityAlgo/RefG, VDOSecurityAlgo, IC204 등)
+- sunnypilot Radar Tracks 스레드(HKG): https://community.sunnypilot.ai/t/radar-tracks-branch-hyundai-kia-genesis/3268
+- sunnypilot ccNC Port(non-HDA2 & HDA2): https://community.sunnypilot.ai/t/ccnc-port-non-hda2-hda2-supported-vehicles-features/1064
+- sunnypilot enable radar tracks 문서: https://docs.sunnypilot.ai/how-to/hyundai/enabling-radar-tracks/
+- comma opendbc: hyundai_kia_mando_front_radar.py, tesla_radar_continental.py(콘티 포맷 참고)
+- Continental SBOOT seed-key bypass 선례(VW): https://github.com/bri3d/Simos18_SBOOT
+- Ghidra Tricore RE: https://ghidra.courses/ , https://reverseengineer.net/seed-to-key-reverse-engineering/
+- 폴트인젝션: Troopers23 PDF, ACM AsiaCCS 2025 "Three Glitches to Rule One Car"
+- GDS/KDS 클론: Diagnoex/알리 등 (레이더 코딩 기능 확인 필요)
+
+---
+
+# 부록 E — 재현 / 이어하기 체크리스트
+1. 차 **완전 OFF → 시동버튼 2번(브레이크 X) = ON-not-READY** (락아웃 리셋 + 세션0x05 진입 조건).
+2. `cd /data/openpilot && git pull && tmux kill-session -t comma`
+3. 도구:
+   - `casper_radar_probe.py` — UDS 프로브. 주요 옵션: `--read`, `--scan-sessions`, `--try-session 0xNN`, `--scan-security 0x05`, `--probe-keylen`, `--unlock --algos ...`, `--enable 0xNNNN HH --algos ...`
+   - `casper_radar_scan.py <normal> <new>` — rlog diff로 트랙 블록 탐지 (PC에서, CEREAL/CARDIR 경로 수정 필요)
+   - 알고리즘 추가: `KEYGENS`에 8→8 함수 등록.
+4. write 성공(=언락+`0x0126=01`) 시: **재시동 READY → openpilot 부팅(RadarTracks=3) → 정차 로그 → scan diff로 0x3A5 블록 확인** → 나오면 그룹2 파서가 처리.
+5. 안전: 정차·안전장소, revert=`--enable 0x0126 00`, 주행 전 AEB/제동 확인. write는 안전장치 영향 가능.
+
+**현재 병목 한 줄 요약: 세션0x05 SecurityAccess(level 0x11, 8B seed→8B key)의 key 알고리즘/상수 미상. 이것만 뚫으면 트랙 enable→파싱까지 자동.**
+
+---
+
+# 부록 F — sunnypilot opendbc `hyundai-radar-tracks` 브랜치 분석 (파싱 참고 + 중대 통찰)
+
+sunnypilot/opendbc `hyundai-radar-tracks` 브랜치에 MRR별 DBC + 확장 레이더 인터페이스 존재.
+enable 스크립트(`sunnypilot/car/hyundai/enable_radar_tracks.py`)는 **여전히 만도 방식(세션0x07+DID0x0142)** = 우리가 실패한 그것. **커뮤니티에도 클래식CAN MRR35 enable 방법 없음 재확인.**
+
+## F-1. 레이더별 트랙 메시지 포맷 (DBC generator)
+| DBC | 주소 | 프레임 | 버스 |
+|-----|------|--------|------|
+| `hyundai_mrr30_radar` | 0x210~0x21F | (CAN-FD) | ACAN |
+| **`hyundai_mrr35_radar`** | **0x3A5~0x3C4 (32개)** | **각 24바이트 = CAN-FD** | ACAN(HDA2) |
+| **`hyundai_mrr30_can_radar`** | **0x238~0x255 step3 (8바이트!)** | **클래식 CAN 8B** | 클래식 |
+| `hyundai_mrr20_radar`, `hyundai_lrr25_radar`, `hyundai_mrrevo14f_radar` | 각종 | - | - |
+
+**MRR35 신호(0x3A5, 24B)**: CHECKSUM(0|16), COUNTER(16|8), STATE(54|3), **LONG_DIST(63|12 x0.05 m)**, **LAT_DIST(76|12 x0.05)**, **REL_SPEED(88|14 x0.01)**, LAT_DIST_ACCEL, REL_ACCEL + NEW_SIGNAL 다수(아직 RE중).
+
+## F-2. 🔑 중대 통찰: 캐스퍼는 24바이트 CAN-FD 트랙을 못 실음
+- MRR35 정식 트랙(0x3A5)은 **각 24바이트 = CAN-FD 전용.** **캐스퍼는 클래식 CAN(최대 8바이트)라 물리적으로 이 포맷 못 받음.**
+- 클래식 CAN 라디오는 **`mrr30_can`(0x238~0x255, 8바이트)** 처럼 **다른(8B) 포맷**을 씀. → **캐스퍼 트랙이 켜지면 0x3A5가 아니라 0x238대(8B)로 나올 가능성.**
+- **스캐너 보완 필요**: enable 후 로그는 0x3A5뿐 아니라 **0x238~0x255 8B 영역**도 확인해야 함. (Casper 현재 지문엔 둘 다 없음 = 방송 안 함 확정)
+
+## F-3. 🔑 CAMERA_SCC 차의 커뮤니티 처리 = SCC 리드 하나뿐
+`sunnypilot/car/hyundai/radar_interface_ext.py`:
+- `use_radar_interface_ext` = `CAMERA_SCC | CANFD_CAMERA_SCC`일 때 (=캐스퍼 해당).
+- 그 경우 **SCC11(0x420, bus2) 단일 리드**만 읽음(트리거 0x420). = **원시 트랙 아님, 지금 캐스퍼랑 동일.**
+- ⇒ **sunnypilot도 CAMERA_SCC 차에서 원시 레이더트랙을 못 뽑음.** 다들 SCC 리드로 폴백. **CAMERA_SCC 아키텍처에서 원시 트랙 추출은 공개적으로 미해결.**
+
+## F-4. 종합 재확인
+- 파싱 포맷은 존재(mrr35=24B CAN-FD, mrr30_can=8B). **캐스퍼는 8B 계열로 나올 것.**
+- 그러나 **CAMERA_SCC + 클래식CAN 조합에서 원시 트랙을 버스로 뽑은 선례가 (커뮤니티 포함) 전무.**
+- 우리 SecurityAccess-enable 경로가 유일한 시도이며, **언락 성공해도 트랙이 우리 버스(0/2)에 실제로 나올지는 미검증**(레이더→카메라 사설링크 가능성 잔존).
+- 참고 DBC: sunnypilot/opendbc `hyundai-radar-tracks` (hyundai_mrr35_radar.py, hyundai_mrr30_can_radar.py, radar_interface_ext.py).
+- commaai/opendbc(upstream): 캐스퍼·MRR35 없음. 만도 DBC + tesla_radar_continental뿐. **upstream 도움 안 됨.**
+
+---
+
+# 부록 G — 해결 가능성 넓은 시야 검토 (2026-07-07)
+
+## 문제의 2단계 구조
+1. **SecurityAccess 언락** (세션0x05, level0x11, 8B key 알고리즘) — 현재 막힘, 알고리즘 비공개.
+2. **언락 후 트랙이 실제 버스에 나오나** — 미검증. CAMERA_SCC+클래식CAN에서 원시트랙 뽑은 선례 전무. 레이더가 카메라로만 SCC리드 보내고 원시트랙은 아예 송신 안 할 가능성 있음(현 스캔상 어느 버스에도 트랙 없음).
+
+## 전체 해결책 매트릭스
+| 분류 | 방법 | 알고리즘 필요? | 승산 | 사용자 난이도 |
+|------|------|:---:|------|------|
+| 보안 돌파 | 펌웨어 덤프+Ghidra RE (TriCore/AURIX 추정) | 추출함 | 확정적(1단계) | ★★★★★ HW+RE |
+| 보안 돌파 | **폴트인젝션/글리칭**(ChipWhisperer ~$300) | 불필요(검사 스킵) | 중~높음 | ★★★★ HW |
+| 보안 돌파 | GDS/KDS 캡처 | 우회(쌍 확보) | 장비 구하기 나름 | ★★ (장비 허들) |
+| 보안 돌파 | 단순변환 브루트 | - | ~5% | ★ 공짜 |
+| 우회 | 런타임 트리거 스푸핑 | - | 낮음(영구config 추정) | ★★★ (HDA2 로그 대조) |
+| 우회 | 레이더 출력 물리 탭 | - | **거의 0** (현재 트랙 미송신 = 탈 데이터 없음) | ★★★ |
+| 대체 | 레이더 교체(방송형으로) | - | 호환성/비용 문제 | ★★★★ |
+| 대체 | **비전 리드 활용**(openpilot 모델이 이미 앞차 추정) + SCC | 불필요 | 이미 됨 | ★ |
+| 대기 | 커뮤니티/타인이 크랙 | - | 시간 | ★ |
+
+## GDS 현실성 (사용자 지적 반영)
+- 클론 GDS/KDS는 **구버전(2020년식류)이 많아 2024 캐스퍼EV 미지원 가능성 큼.** 순정은 고가+구독. → **사용자에겐 약한 경로.**
+
+## 냉정한 가치 판단 (is it worth it)
+- 캐스퍼는 **이미 카메라 SCC 롱컨 + 비전 리드로 정상 주행 중.** 원시 레이더트랙은 끼어듦/정지출발/유령제동 개선의 **"있으면 좋은" 향상**이지 필수 아님.
+- 반면 크랙 비용 = **콘티넨탈 안전레이더 SecurityAccess를 펌웨어RE/글리칭으로 뚫기**(고난도 HW+RE) + **뚫어도 트랙이 클래식CAN 버스에 나올지 미검증**.
+- 즉 **고난도·불확실 투자 vs 한계효용** → 취미/학습 프로젝트로는 가치 있으나, 실용 ROI는 낮음.
+
+## 현실적 권고
+1. **공짜인 단순변환 2~3사이클**만 마무리(혹시 모르니).
+2. HW/RE에 관심 있으면 → **폴트인젝션**이 "알고리즘 없이 뚫는" 가장 현실적 경로(학습 곡선 있음).
+3. 아니면 → **여기까지 완전 문서화하고 보류.** 캐스퍼는 지금도 잘 굴러가고, 나중에 (a)누가 크랙하거나 (b)GDS 기회 생기면 재개. 문서·도구 다 준비돼 있음.
+
+---
+
+# 부록 H — 🔑 현대 seed-key 단서 (러시아/CIS 포럼) → 단순변환 확률 상향
+
+**nefariousmotorsports "Seed to Key Hyundai"** (2025-02, CrimSoon)에 실제 현대 모듈(주소 **0x7C6/0x7CE, 4바이트, level 1**) 캡처 (seed,key) 쌍 존재. 역산 결과:
+> **`key = (~seed) + 0x0D`** (비트반전 + 상수 0x0D, 32비트). 캡처 5쌍 전부 검증 OK.
+- 예: seed `08400210` → ~ = `F7BFFDEF` → +0x0D = `F7BFFDFC`(실제 key와 일치).
+
+**의미(중대):**
+- **현대는 최소 일부 모듈에서 "complement + 상수" 초단순 알고리즘을 실제 사용.**
+- **우리 레이더 `complement`은 아직 미검증**(지난 락아웃에 막힘) → 단순변환 확률이 ~5%가 아니라 **훨씬 높음.**
+- 단 우리 레이더는 8바이트/level0x11로 **모듈이 다름** → 상수는 다를 수 있음(0x0D는 그 카메라 모듈값). 구조(complement 계열)가 핵심 단서.
+
+**probe 반영**: `SIMPLE_ALGOS` 맨 앞에 complement 계열 배치 + 신규 `compadd0d`(~seed+0x0D 64bit), `comp_last0d`(끝바이트+0x0D), `compadd01`. (`_compadd`/`_comp_lastadd`)
+
+**다음(최우선, 차 전원 재투입으로 락아웃 리셋 후):**
+`--enable 0x0126 01 --algos complement,compadd0d --bus 2` → 안 되면 `--algos comp_last0d,revcomplement` → `--algos compadd01,swaphalves` ...
+- (참고) 우리 레이더 seed는 랜덤이라, complement류가 맞으면 즉시 UNLOCKED. 상수가 미지면 못 맞힐 수 있으나 plain complement(상수0)부터.
+
+**추가 아이디어**: 만약 우리가 (seed,key) 쌍을 하나라도 캡처하면(GDS 등) → 이 포럼처럼 즉시 역산 가능. CrimSoon 사례가 방법론 증명.

@@ -16,7 +16,9 @@ RADAR_TX = 0x7D0
 NRC = {0x10: "generalReject", 0x11: "serviceNotSupported", 0x12: "subFunctionNotSupported",
        0x13: "badLength/format", 0x22: "conditionsNotCorrect", 0x24: "requestSequenceError",
        0x31: "requestOutOfRange (DID absent)", 0x33: "securityAccessDenied (needs key)",
-       0x35: "invalidKey", 0x72: "generalProgrammingFailure",
+       0x35: "invalidKey", 0x36: "exceedNumberOfAttempts (LOCKOUT)",
+       0x37: "requiredTimeDelayNotExpired (LOCKOUT - wait/power-cycle)",
+       0x72: "generalProgrammingFailure",
        0x7E: "subFuncNotSupportedInSession", 0x7F: "svcNotSupportedInSession"}
 
 
@@ -150,11 +152,27 @@ def _swap_nibbles(b):
     return bytes(((x << 4) | (x >> 4)) & 0xFF for x in b)
 
 
+def _compadd(seed, c):
+    # nefariousmotorsports: a Hyundai module (0x7C6, 4B) uses key = (~seed)+0x0D.
+    # 8-byte analog: complement then add constant to the big-endian 64-bit value.
+    v = (int.from_bytes(bytes(x ^ 0xFF for x in seed), "big") + c) & ((1 << 64) - 1)
+    return v.to_bytes(8, "big")
+
+
+def _comp_lastadd(seed, c):
+    b = bytearray(x ^ 0xFF for x in seed)
+    b[-1] = (b[-1] + c) & 0xFF
+    return bytes(b)
+
+
 # extra self-contained 8->8 transforms (no per-ECU secret) to brute a bit
 KEYGENS = {
     "arrayreverse": keygen_arrayreverse,
     "ic172": keygen_ic172,
     "complement": lambda s: bytes(x ^ 0xFF for x in s),
+    "compadd0d": lambda s: _compadd(s, 0x0D),          # Hyundai camera-module style (~seed + 0x0D)
+    "comp_last0d": lambda s: _comp_lastadd(s, 0x0D),   # complement, last byte + 0x0D
+    "compadd01": lambda s: _compadd(s, 0x01),
     "swaphalves": lambda s: s[4:8] + s[0:4],
     "revcomplement": lambda s: bytes(x ^ 0xFF for x in reversed(s)),
     "nibbleswap": _swap_nibbles,
@@ -167,8 +185,10 @@ KEYGENS = {
     "xorAA": lambda s: bytes(x ^ 0xAA for x in s),
 }
 DEFAULT_ALGOS = ["arrayreverse", "ic172"]
-SIMPLE_ALGOS = ["complement", "revcomplement", "swaphalves", "nibbleswap",
-                "nibbleswap_rev", "rotl1", "rotr1", "add1", "sub1", "xor55", "xorAA"]
+# complement family first — a Hyundai module was proven to use ~seed+const (nefariousmotorsports)
+SIMPLE_ALGOS = ["complement", "compadd0d", "comp_last0d", "compadd01", "revcomplement",
+                "swaphalves", "nibbleswap", "nibbleswap_rev", "rotl1", "rotr1", "add1", "sub1",
+                "xor55", "xorAA"]
 
 
 def do_unlock(uds, session, algos, level=0x11):
