@@ -165,12 +165,22 @@ def _comp_lastadd(seed, c):
     return bytes(b)
 
 
+def _compadd_halves(seed, c):
+    # camera module (4B) used key=~seed+0x0D; radar(8B) might apply it per 32-bit half
+    out = bytearray()
+    for h in (seed[0:4], seed[4:8]):
+        v = ((int.from_bytes(bytes(x ^ 0xFF for x in h), "big")) + c) & 0xFFFFFFFF
+        out += v.to_bytes(4, "big")
+    return bytes(out)
+
+
 # extra self-contained 8->8 transforms (no per-ECU secret) to brute a bit
 KEYGENS = {
     "arrayreverse": keygen_arrayreverse,
     "ic172": keygen_ic172,
     "complement": lambda s: bytes(x ^ 0xFF for x in s),
     "compadd0d": lambda s: _compadd(s, 0x0D),          # Hyundai camera-module style (~seed + 0x0D)
+    "compadd0d_h": lambda s: _compadd_halves(s, 0x0D), # per-32bit-half ~seed+0x0D (camera style x2)
     "comp_last0d": lambda s: _comp_lastadd(s, 0x0D),   # complement, last byte + 0x0D
     "compadd01": lambda s: _compadd(s, 0x01),
     "swaphalves": lambda s: s[4:8] + s[0:4],

@@ -689,3 +689,15 @@ enable 스크립트(`sunnypilot/car/hyundai/enable_radar_tracks.py`)는 **여전
 - (참고) 우리 레이더 seed는 랜덤이라, complement류가 맞으면 즉시 UNLOCKED. 상수가 미지면 못 맞힐 수 있으나 plain complement(상수0)부터.
 
 **추가 아이디어**: 만약 우리가 (seed,key) 쌍을 하나라도 캡처하면(GDS 등) → 이 포럼처럼 즉시 역산 가능. CrimSoon 사례가 방법론 증명.
+
+### 2026-07-07 (6) — 러시아/중국/튜너포럼 광범위 재검색 결과
+검색: 러시아(drive2/auto-bk.ru/чиптюнинг), 중국(CSDN/知乎/大陆雷达=Continental), nefariousmotorsports, MHH Auto, pcmhacking, DiagCode/BinUnlock/DAP4CS, PCMflash.
+- **결론: Continental MRR-35 8B/level0x11 알고리즘은 어디에도 공개 안 됨.** 다들 (a)방법론(Seed&Key DLL 제작법), (b)다른 모듈(카메라 0x7C6=complement+0x0D), (c)엔진/게이트웨이 모듈뿐.
+- 잠재적 마지막 소스: **MHH Auto "Security Access Algorithms - All Brands All Ecus"**(로그인월, 접근불가) — 있다면 여기.
+- 방법론 재확인: **정답 (seed,key) 쌍 없이는 역산 불가.** 우린 seed만 있고 정답key 없음 → 구조 추측만 가능.
+
+**probe 테스트 상태 (8B/level0x11, 2회/차전원사이클):**
+- ✗ arrayreverse, ic172, complement, compadd0d, comp_last0d(락아웃에 막혀 재시도 필요)
+- 미검증(complement 계열 우선): **compadd0d_h**(신규, 32bit 반쪽별 ~+0x0D = 카메라식x2), comp_last0d, compadd01, revcomplement
+- 그다음(확률낮음): swaphalves, nibbleswap, nibbleswap_rev, rotl1, rotr1, add1, sub1, xor55, xorAA
+- ⚠️ **배치마다 반드시 차 완전 OFF→ON** (콤마 재부팅·ON유지로는 카운터 리셋 안 됨). 2회 초과 시 0x36 락아웃.
