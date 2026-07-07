@@ -701,3 +701,222 @@ enable 스크립트(`sunnypilot/car/hyundai/enable_radar_tracks.py`)는 **여전
 - 미검증(complement 계열 우선): **compadd0d_h**(신규, 32bit 반쪽별 ~+0x0D = 카메라식x2), comp_last0d, compadd01, revcomplement
 - 그다음(확률낮음): swaphalves, nibbleswap, nibbleswap_rev, rotl1, rotr1, add1, sub1, xor55, xorAA
 - ⚠️ **배치마다 반드시 차 완전 OFF→ON** (콤마 재부팅·ON유지로는 카운터 리셋 안 됨). 2회 초과 시 0x36 락아웃.
+
+---
+
+# 부록 I — GDS/KDS 캡처 방법 상세 (알고리즘 역산용 정답 쌍 확보)
+
+## I-1. 원리 (오해 방지)
+- GDS엔 "레이더트랙 켜기" 기능 없음. GDS는 **정품 기능(레이더 배리언트 코딩/정렬/보정)** 위해 레이더를 SecurityAccess로 **언락**함.
+- 그 언락 = `27 11`(requestSeed)→레이더가 seed→`27 12 <정답key>`→`67 12`(OK)가 CAN에 흐름.
+- **우리가 이 (seed, 정답key) 쌍을 캡처** → 역산(우리 seed는 random이라 알고리즘 자체를 복원해야 함; 쌍 2~3개면 유리) → 이후 GDS 없이 probe로 언락+enable.
+- **한 번 크랙하면 동일 레이더(99110-GX000) 모든 캐스퍼EV에 적용 가능.** = 커뮤니티 가치 큼.
+
+## I-2. 캡처 셋업 (사용자 절차)
+전제: 레이더는 우리 probe로 **bus 2에서 0x7d0/0x7d8 응답 확인됨** → comma 판다가 그 버스를 봄 → **GDS 언락이 rlog에 잡힘.**
+
+1. **comma 부팅** (켜지면 loggerd가 모든 CAN을 rlog로 자동 기록). 차는 정차·안전장소.
+2. **차 IGN ON** (모터는 GDS 지시대로; 보통 레이더 코딩은 IGN ON 요구). EV는 ON 상태.
+3. **GDS VCI를 OBD-II에 연결**, GDS 소프트에서 차량 선택(Casper EV 2024).
+4. **전방 레이더(SCC/FCA) 모듈** 진입.
+5. **SecurityAccess를 유발하는 기능 실행**: **배리언트 코딩** 또는 **레이더 정렬/보정(Radar Alignment/Calibration)**.
+   - 언락은 **기능 시작 시점**에 일어남. **실제 값 변경 직전에 취소**해도 seed/key 교환은 이미 캡처됨 → **레이더 설정 안 바꾸고 안전하게 캡처 가능.**
+   - 가능하면 기능을 **2~3회 반복**(다른 seed로 쌍 여러 개 = 역산 신뢰↑).
+6. rlog에 `0x7d0: 02 27 11 ...` / `0x7d8: ...67 11 <seed>` / `0x7d0: ...27 12 <key>` / `0x7d8: ...67 12`(OK) 포함됨.
+7. **그 rlog를 넘기면** → 기존 UDS 파서(uds_dump 계열)로 (seed,key) 추출 → 알고리즘 역산 시도.
+
+## I-3. "메뉴만 진입하면 되나?" — 부분적으로만
+- **단순 메뉴 진입/DTC 읽기 = 언락 안 일어날 수 있음**(보안 불필요). → seed/key 안 남음.
+- **반드시 "코딩/보정" 같은 SecurityAccess 필요 기능을 실행**해야 `27 11/12` 교환이 발생.
+- 그 기능만 실행하면 → **rlog엔 자동으로 남음**(별도 로깅 세팅 불필요, comma 켜져 있기만 하면).
+
+## I-4. 주의/변수
+- **SGW(시큐리티 게이트웨이)**: 신형 현기차는 OBD 접근을 SGW가 막음. GDS는 인증 통과함. 캡처엔 무관(레이더 응답은 어차피 bus2에 흐름). 단 GDS가 라디오/레이더에 실제 도달하는지는 실차 확인 필요.
+- 첫 캡처에 0x7d0 교환이 rlog에 안 보이면 → GDS가 다른 버스/라우팅 썼을 수 있음 → 그땐 candump로 전 버스 로깅 재시도.
+- **위험 최소화**: 코딩 값 실제 변경은 하지 말 것(언락만 캡처하고 취소). 잘못 코딩 시 레이더 오설정 위험.
+- GDS **클론은 구버전이라 2024 캐스퍼EV 미지원 가능성** → 최신/순정 필요할 수 있음(사용자 지적).
+
+## I-5. 캡처 후 (우리가 할 일)
+- (seed,key) 쌍으로 알고리즘 역산 (complement류/선형/VDO계열 등 대입·확인).
+- 복원되면 `casper_radar_probe.py`의 `KEYGENS`에 등록 → `--enable 0x0126 01`로 언락+write → 재부팅 후 트랙(0x238대 8B or 0x3A5) 확인.
+- 성공 시 문서화 + (원하면) 커뮤니티 공유(동일 레이더 차량 다수 수혜).
+
+---
+
+# 부록 J — 언락 이후 남은 단계 + 리스크 (일사천리? 아니오)
+
+언락(key 알고리즘 확보)은 **가장 큰 벽이지만 충분조건은 아님.** 이후 관문:
+
+| 단계 | 내용 | 리스크 | 비고 |
+|------|------|--------|------|
+| 1. 언락 성공 | 세션0x05 SecurityAccess 통과 | (해결됨) | probe에 keygen 등록하면 끝 |
+| 2. enable DID 특정 | 어느 config DID=어느 값이 트랙 출력 ON인지 | **낮음** | 0x0126 추정일 뿐. 언락 후 후보 DID들(0x0126/0x0129 등) 써보고 재부팅→트랙 확인식 실험으로 규명. 만도는 0x0142였음 |
+| 3. **레이더가 실제 방송하나** | enable해도 트랙이 우리 버스(0/2)에 나오나 | **중~높음 ⚠️** | **최대 잔여 불확실성.** CAMERA_SCC 차는 레이더가 카메라로만 SCC리드 보내고 원시트랙은 아예 송신 안 할 수도. CAMERA_SCC+클래식CAN 원시트랙 선례 전무 |
+| 4. 트랙 포맷/주소 파싱 | 나오면 8B 클래식CAN 형식(0x238대 mrr30_can類) 해독 | 중 | 커뮤니티가 부분 RE(거리/횡/속도는 대략 알려짐, NEW_SIGNAL 다수 미상). 캐스퍼 실제 주소/포맷 확인+매핑 필요 |
+| 5. 파서 통합 | Carrot radar_interface에 캐스퍼 클래식CAN MRR 분기 추가 | 낮~중 | Carrot 그룹인프라 有. 단 그룹2는 0x3A5(24B CAN-FD)라 **그대로 안 맞음** → 8B 클래식 분기 신규 필요 |
+| 6. 롱컨/안전 검증 | 트랙→longitudinal, AEB/FCW 영향 확인 | 필수 | enable이 안전장치 건드리는지 확인, 유령제동 등 튜닝 |
+
+**정직한 요약:**
+- **일사천리 아님.** 언락은 최대 난관 제거지만, **3번(방송 자체가 되나)** 이 언락 후에도 막힐 수 있는 진짜 리스크.
+- 3번만 통과하면(=트랙이 버스에 나오면) → 4·5·6은 **"알려진 작업+실차 반복"** 수준(며칠~몇 주). Carrot 인프라 덕에 처음부터 짜는 건 아님.
+- 즉 구조: **[언락(현재 벽)] → [방송되나?(2차 관문)] → [파싱·통합(노가다지만 됨)].**
+
+---
+
+# 부록 K — GSW 배선도 확인: E22 레이더와 F60 카메라 사이 L-CAN 구조
+
+## K-1. GSW에서 확인한 회로/커넥터
+
+사용자 GSW 확인 기준:
+
+- 경로: `2026 > 엔진 > 80kW > 커넥터 정보 > 프론트 하네스 > CV20-5`
+- 회로: `SD956-1 전방 충돌 방지 보조(FCA) 회로`
+- 커넥터/유닛:
+  - `E22 = 전방 충돌 방지 보조 유닛`
+  - `F60 = 다기능 카메라 모듈`
+
+`E22` 핀 정보:
+
+| 핀 | 신호 | 연결 |
+|----|------|------|
+| 1 | GND | 접지 `GE01` |
+| 2 | `L-CAN High` | `F60` 다기능 카메라 모듈 |
+| 3 | `L-CAN Low` | `F60` 다기능 카메라 모듈 |
+| 6 | ON/START 전원 | ICU 정션 블록/퓨즈 |
+
+`F60` 쪽 구조:
+
+- `F60`은 `E22`와 `L-CAN High/Low`로 직접 연결.
+- `F60`은 별도로 `C-CAN High/Low`를 차량망/정션 블록 쪽으로 가짐.
+
+요약 구조:
+
+```text
+E22 전방 충돌 방지 보조 유닛(레이더로 추정)
+  <--- L-CAN --->
+F60 다기능 카메라 모듈
+  <--- C-CAN --->
+차량망 / ICU / openpilot이 보는 CAN 경로
+```
+
+## K-2. rlog 결과와의 정합
+
+이 GSW 구조는 지금까지의 rlog 분석과 잘 맞는다.
+
+1. `rt_0` 및 `20260706/20260707` 로그에서 raw radar point block이 없다.
+   - `0x3A5~0x3C4`: 없음
+   - `0x210~0x21F`: 없음
+   - `0x238~0x255`: 사실상 `0x251` 단일 메시지뿐
+   - `0x500~0x51F`: 듬성듬성 일부 주소만 있고 Mando track array 아님
+2. `rt_0`에서는 `liveTracks trackId=0` 단일 lead만 정상.
+   - raw multi-object radar track이 아니라 SCC/FCA/카메라 쪽에서 가공된 단일 lead로 보는 것이 맞음.
+3. 레이더 UDS는 보인다.
+   - `0x7d0/0x7d8` 응답으로 `99110-GX000` MRR35 ECU는 살아 있고 진단 접근 가능.
+   - 하지만 object raw frame은 openpilot이 보는 CAN에는 안 보임.
+4. 실제 수신 `bus 1(src=1)`은 로그에 없다.
+   - 기존 Mando식 `bus1 0x500~0x51F` radar point 구조와 다름.
+
+따라서 현재 가장 그럴듯한 해석:
+
+```text
+MRR35/E22 raw 또는 내부 object 정보는 E22-F60 사이 L-CAN에 있을 수 있고,
+F60 카메라가 이를 fusion/SCC 단일 lead로 가공한 뒤 차량망(C-CAN)으로 내보내는 구조일 가능성이 높다.
+```
+
+## K-3. raw data 캡처 가능성 판단
+
+이 구조가 곧바로 "불가능"을 뜻하지는 않는다. 다만 일반 comma rlog만으로 raw를 볼 수 있는 조건이 좁아진다.
+
+가능한 경우:
+
+1. **E22가 raw object를 C-CAN/openpilot 관측 bus로 방송하도록 enable되는 경우**
+   - SecurityAccess 언락 후 config 변경으로 `bus0/2/1/128/130` 중 어딘가에 새 object frame이 나오면 포팅 가능.
+2. **comma/panda가 E22-F60 L-CAN을 물리적으로 보고 있는 경우**
+   - 그 경우 raw가 이미 보였어야 하지만, 현재 rlog상은 보이지 않음.
+3. **별도 CAN tap으로 E22-F60 L-CAN을 직접 캡처하는 경우**
+   - 하드웨어 작업이 필요하지만, raw 존재 여부를 가장 직접적으로 확인 가능.
+
+어려운 경우:
+
+1. **raw가 E22-F60 L-CAN에만 있고 comma 하네스가 그 선을 안 보는 경우**
+   - 일반 rlog/qlog로는 raw 캡처 불가.
+   - openpilot 코드 포팅만으로는 raw를 사용할 수 없음.
+2. **E22가 raw object 자체를 외부로 송신하지 않고 F60에 단일/가공 정보만 주는 경우**
+   - unlock을 해도 raw frame이 안 나올 수 있음.
+3. **F60이 raw를 내부 처리 후 C-CAN에는 SCC 단일 lead만 내보내는 경우**
+   - 현재 로그의 `trackId=0` 정상 동작과 가장 잘 맞는 시나리오.
+
+## K-4. 현재 결론
+
+- 현재 rlog 기준으로 openpilot이 보는 bus에는 raw radar object data가 없다.
+- GSW상 레이더로 추정되는 `E22`는 `F60` 다기능 카메라와 `L-CAN`으로 직접 연결된다.
+- 따라서 raw data가 존재한다면 가장 유력한 위치는 `E22 <-> F60 L-CAN`이다.
+- 일반 comma 로그에서 raw를 보려면, 그 L-CAN이 panda에 물려 있거나, 언락/config 후 raw가 C-CAN/openpilot 관측 bus로 새로 방송되어야 한다.
+- 즉 **raw 캡처가 원천적으로 불가능하다고 확정된 것은 아니지만, 현재 하네스/로그만으로는 불가능한 구조일 가능성이 높아졌다.**
+
+## K-5. 용어 정리: config 대상과 기대 bus
+
+현재 probe/config 시도 대상은 **카메라 F60이 아니라 레이더 E22**이다.
+
+```text
+tester/openpilot -> 0x7d0  (request to radar E22)
+radar E22        -> 0x7d8  (response from radar E22)
+```
+
+즉 실험의 의미는:
+
+```text
+"카메라야 raw를 보내라"가 아니라
+"레이더야 output/config를 바꿔라"이다.
+```
+
+언락/config 성공 후 raw가 rlog에 나온다면 bus는 아직 미정이다. 우선순위는 다음처럼 본다.
+
+| 후보 | 기대 이유 | 현재 상태 |
+|------|-----------|-----------|
+| `bus2` / `bus128` | 레이더 UDS와 카메라/SCC 계열이 이쪽에서 관측됨 | raw point 없음 |
+| `bus0` / `bus130` | 차량 공용 CAN/echo 계열 후보 | raw point 없음 |
+| `bus1` / `bus129` | 기존 Mando radar point가 흔한 위치 | 실제 수신 `bus1(src=1)` 없음. `bus129`는 진단/echo 성격만 보임 |
+| `E22-F60 L-CAN` | GSW상 레이더와 카메라가 직접 연결된 선 | 일반 rlog로 관측되는지 미확정. raw가 있다면 가장 유력 |
+
+따라서 rlog 성공 판정은 bus 번호가 아니라 **새 object frame 출현**이다.
+
+성공으로 볼 수 있는 예:
+
+```text
+0x3A5~0x3C4 연속/반복 object block
+0x238~0x255 계열 8B object block
+0x500~0x51F Mando류 object block
+또는 앞차 거리/상대속도와 동기화되는 새로운 주소 블록
+```
+
+## K-6. 현재 작업 가설과 다음 분기
+
+현재 가장 중요한 검증 질문:
+
+```text
+SecurityAccess 언락 후 config를 바꾸면,
+레이더 E22가 openpilot이 보는 bus에 raw object frame을 새로 방송하는가?
+```
+
+분기:
+
+1. **rlog에 raw가 새로 보임**
+   - 이 경우 포팅 가능.
+   - 다음 단계는 주소/주기/bit layout 분석, DBC 작성, `radar_interface.py` 캐스퍼 MRR35 분기 추가.
+2. **rlog에는 안 보이지만 L-CAN 직접 tap에서는 raw가 보임**
+   - raw는 존재하지만 현재 comma 하네스가 안 보는 구조.
+   - 코드만으로는 부족하고 하네스/캡처 경로 변경이 필요.
+3. **rlog에도 없고 L-CAN 직접 tap에도 raw가 없음**
+   - 레이더가 raw object를 외부로 송신하지 않거나, 별도 enable/routine이 더 필요.
+   - 이 경우 GDS/KDS 캡처, 펌웨어 RE, 또는 커뮤니티 seed-key/enable 정보가 필요.
+4. **언락 자체가 안 됨**
+   - 현재처럼 seed-key 알고리즘/GDS 캡처가 병목.
+
+현 시점의 실용 결론:
+
+```text
+코드 포팅을 시작할 단계는 아직 아님.
+1차 목표는 security key 확보 후 rlog에서 raw object frame이 새로 생기는지 증명하는 것.
+raw가 어느 bus든 실제로 보이면 그때부터는 포팅/파싱 작업으로 전환 가능.
+```
