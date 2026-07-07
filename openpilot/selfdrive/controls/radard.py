@@ -8,6 +8,7 @@ import copy
 
 import capnp
 from openpilot.cereal import messaging, log, car
+from opendbc.car.hyundai.values import HyundaiExtFlags
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
@@ -75,6 +76,10 @@ CORNER_235_TRACK_ID_START = 200
 CORNER_235_TRACK_ID_END = 220
 CORNER_180_TRACK_ID_START = 240
 CORNER_180_TRACK_ID_END = 250
+CORNER_430_TRACK_ID_START = 300
+CORNER_430_TRACK_ID_END = 412
+CORNER_CARSTATE_LF_TRACK_ID = 412
+CORNER_CARSTATE_RF_TRACK_ID = 413
 
 CORNER_FRONT_MATCH_DREL = 3.0
 CORNER_FRONT_MATCH_VREL = 2.0
@@ -90,6 +95,11 @@ CORNER_STOPPED_NEAR_IN_LANE_PROB = 0.35
 CORNER_STOPPED_FAR_IN_LANE_PROB = 0.5
 CORNER_STOPPED_FAR_DREL = 60.0
 CORNER_VISION_KEEP_PROB = 0.75
+CORNER_430_CARSTATE_MATCH_DREL = 3.0
+CORNER_430_CARSTATE_MAX_DT = 0.2
+CORNER_430_CARSTATE_MAX_DREL_DELTA = 5.0
+CORNER_430_CARSTATE_MAX_YREL_DELTA = 1.0
+CORNER_430_CARSTATE_MAX_YVREL = 5.0
 
 def laplacian_pdf(x: float, mu: float, b: float):
   diff = abs(x - mu) / max(b, 1e-4)
@@ -497,11 +507,12 @@ def get_RadarState_from_vision(md, lead_msg: capnp._DynamicStructReader, v_ego: 
   }
 
 class RadarD:
-  def __init__(self, delay: float = 0.0, is_vw_meb: bool = False):
+  def __init__(self, delay: float = 0.0, is_vw_meb: bool = False, enable_carstate_corner_tracks: bool = False):
     self.current_time = 0.0
 
     # VW MEB(ID.4/ID.5)에서만 True -> get_lead가 infiniteCable2(=comma) 리드선택을 따름(sticky/track_scc 미사용).
     self.is_vw_meb = is_vw_meb
+    self.enable_carstate_corner_tracks = enable_carstate_corner_tracks
 
     self.tracks: dict[int, Track] = {}
 
@@ -535,6 +546,9 @@ class RadarD:
     self.leadCutIn = empty_lead()
     self.cornerLeadStopped = empty_lead()
     self.corner_tracks_available = False
+    self.corner_430_carstate_prev = {}
+    self.carstate_corner_prev = {}
+    self.carstate_corner_tracks: dict[int, Track] = {}
 
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
@@ -625,7 +639,9 @@ class RadarD:
       alive_tracks = {tid: trk for tid, trk in self.tracks.items() if trk.measured and trk.cnt > 2 }
       front_tracks = {tid: trk for tid, trk in alive_tracks.items() if not self._is_corner_track(trk)}
       corner_tracks = {tid: trk for tid, trk in alive_tracks.items() if self._is_corner_track(trk)}
-      self.corner_tracks_available = any(self._is_corner_track(trk) for trk in alive_tracks.values())
+      carstate_corner_tracks = self._update_carstate_corner_tracks(sm['carState'], md) if self.enable_carstate_corner_tracks else {}
+      corner_tracks.update(carstate_corner_tracks)
+      self.corner_tracks_available = bool(corner_tracks)
 
       self.radar_state.leadOne, self.radar_detected = self.get_lead(sm['carState'], md, front_tracks, 0, leads_v3[0], model_v_ego, self.lead_prob_filters[0].x, low_speed_override=False)
       self.radar_state.leadTwo, _ = self.get_lead(sm['carState'], md, front_tracks, 1, leads_v3[1], model_v_ego, self.lead_prob_filters[1].x, low_speed_override=False)
@@ -633,6 +649,8 @@ class RadarD:
       self.lane_line_available = md.laneLineProbs[1] > 0.5 and md.laneLineProbs[2] > 0.5
       compute_tracks = dict(front_tracks)
       compute_tracks.update(corner_tracks)
+      if self.enable_carstate_corner_tracks:
+        self._apply_carstate_corner_geometry(sm['carState'], compute_tracks, md)
       self.compute_leads(self.v_ego, compute_tracks, md, self.lead_prob_filters[0].x, front_tracks)
       if self.leadTwo is not None:
         self.radar_state.leadTwo = self.leadTwo
@@ -650,8 +668,135 @@ class RadarD:
   def _is_corner_track(self, t: Track) -> bool:
     return (
       CORNER_235_TRACK_ID_START <= t.identifier < CORNER_235_TRACK_ID_END or
-      CORNER_180_TRACK_ID_START <= t.identifier < CORNER_180_TRACK_ID_END
+      CORNER_180_TRACK_ID_START <= t.identifier < CORNER_180_TRACK_ID_END or
+      CORNER_430_TRACK_ID_START <= t.identifier < CORNER_430_TRACK_ID_END or
+      (self.enable_carstate_corner_tracks and t.identifier in (CORNER_CARSTATE_LF_TRACK_ID, CORNER_CARSTATE_RF_TRACK_ID))
     )
+
+  def _is_carstate_corner_track(self, t: Track) -> bool:
+    return self.enable_carstate_corner_tracks and t.identifier in (CORNER_CARSTATE_LF_TRACK_ID, CORNER_CARSTATE_RF_TRACK_ID)
+
+  def _is_corner_430_track(self, t: Track) -> bool:
+    return CORNER_430_TRACK_ID_START <= t.identifier < CORNER_430_TRACK_ID_END
+
+  def _carstate_corner_targets(self, cs) -> list[tuple[str, int, float, float]]:
+    targets = []
+    if cs.leftLongDist > 0.0 and cs.leftLatDist > 0.0:
+      targets.append(("LF", 1, float(cs.leftLongDist), float(cs.leftLatDist)))
+    if cs.rightLongDist > 0.0 and cs.rightLatDist > 0.0:
+      targets.append(("RF", -1, float(cs.rightLongDist), -float(cs.rightLatDist)))
+    return targets
+
+  def _update_carstate_corner_tracks(self, cs, md) -> dict[int, Track]:
+    now = self.current_time
+    active_ids = set()
+    for name, side_sign, d_rel, y_rel in self._carstate_corner_targets(cs):
+      track_id = CORNER_CARSTATE_LF_TRACK_ID if side_sign > 0 else CORNER_CARSTATE_RF_TRACK_ID
+      active_ids.add(track_id)
+      t = self.carstate_corner_tracks.get(track_id)
+      if t is None:
+        t = self.carstate_corner_tracks[track_id] = Track(track_id)
+
+      prev = self.carstate_corner_prev.get(name)
+      v_rel = t.vRel if t.measured else 0.0
+      yv_rel = 0.0
+      if prev is not None:
+        prev_t, prev_d_rel, prev_y_rel, prev_v_rel, prev_yv_rel = prev
+        dt = now - prev_t
+        if 0.0 < dt <= CORNER_430_CARSTATE_MAX_DT:
+          d_delta = d_rel - prev_d_rel
+          y_delta = y_rel - prev_y_rel
+          if abs(d_delta) <= CORNER_430_CARSTATE_MAX_DREL_DELTA:
+            raw_v_rel = d_delta / dt
+            v_rel = 0.5 * prev_v_rel + 0.5 * raw_v_rel
+          if abs(y_delta) <= CORNER_430_CARSTATE_MAX_YREL_DELTA:
+            raw_yv_rel = y_delta / dt
+            if abs(raw_yv_rel) <= CORNER_430_CARSTATE_MAX_YVREL:
+              yv_rel = 0.5 * prev_yv_rel + 0.5 * raw_yv_rel
+
+      self.carstate_corner_prev[name] = (now, d_rel, y_rel, v_rel, yv_rel)
+
+      if t.measured and (abs(t.dRel - d_rel) > CORNER_430_CARSTATE_MAX_DREL_DELTA or
+                         abs(t.yRel - y_rel) > CORNER_430_CARSTATE_MAX_YREL_DELTA):
+        t.selected_count = 0
+        t.is_stopped_car_count = 0
+        t.cut_in_count = 0
+
+      t.measured = True
+      t.dRel = d_rel
+      t.yRel = y_rel
+      t.vRel = v_rel
+      t.vLead = t.vLeadK = v_rel + self.v_ego
+      t.aLead = t.aLeadK = 0.0
+      t.jLead = 0.0
+      t.yvLead = yv_rel
+      t.dRel_future = t.dRel + t.vLead * self.radar_lat_factor
+      t.yRel_future = t.yRel + t.yvLead * self.radar_lat_factor
+      t.d_path(md)
+      t.cnt += 1
+
+    for track_id, t in list(self.carstate_corner_tracks.items()):
+      if track_id not in active_ids:
+        name = "LF" if track_id == CORNER_CARSTATE_LF_TRACK_ID else "RF"
+        self.carstate_corner_prev.pop(name, None)
+        t.measured = False
+        t.cnt = 0
+        t.selected_count = 0
+        t.is_stopped_car_count = 0
+        t.cut_in_count = 0
+
+    return {
+      track_id: t for track_id, t in self.carstate_corner_tracks.items()
+      if t.measured and t.cnt > 2
+    }
+
+  def _apply_carstate_corner_geometry(self, cs, tracks: dict[int, Track], md) -> None:
+    targets = self._carstate_corner_targets(cs)
+    if not targets:
+      return
+
+    now = self.current_time
+    used_ids = set()
+    for name, side_sign, d_rel, y_rel in targets:
+      candidates = [
+        t for t in tracks.values()
+        if self._is_corner_430_track(t) and t.identifier not in used_ids and t.yRel * side_sign > 0.0
+      ]
+      if not candidates:
+        continue
+
+      closest = min(candidates, key=lambda t: abs(t.dRel - d_rel))
+      if abs(closest.dRel - d_rel) > CORNER_430_CARSTATE_MATCH_DREL:
+        continue
+
+      prev = self.corner_430_carstate_prev.get(name)
+      v_rel = closest.vRel
+      yv_rel = 0.0
+      if prev is not None:
+        prev_t, prev_d_rel, prev_y_rel, prev_v_rel, prev_yv_rel = prev
+        dt = now - prev_t
+        if 0.0 < dt <= CORNER_430_CARSTATE_MAX_DT:
+          d_delta = d_rel - prev_d_rel
+          y_delta = y_rel - prev_y_rel
+          if abs(d_delta) <= CORNER_430_CARSTATE_MAX_DREL_DELTA:
+            raw_v_rel = d_delta / dt
+            v_rel = 0.5 * prev_v_rel + 0.5 * raw_v_rel
+          if abs(y_delta) <= CORNER_430_CARSTATE_MAX_YREL_DELTA:
+            raw_yv_rel = y_delta / dt
+            if abs(raw_yv_rel) <= CORNER_430_CARSTATE_MAX_YVREL:
+              yv_rel = 0.5 * prev_yv_rel + 0.5 * raw_yv_rel
+
+      self.corner_430_carstate_prev[name] = (now, d_rel, y_rel, v_rel, yv_rel)
+
+      closest.dRel = d_rel
+      closest.yRel = y_rel
+      closest.vRel = v_rel
+      closest.vLead = closest.vLeadK = v_rel + self.v_ego
+      closest.yvLead = yv_rel
+      closest.dRel_future = closest.dRel + closest.vLead * self.radar_lat_factor
+      closest.yRel_future = closest.yRel + closest.yvLead * self.radar_lat_factor
+      closest.d_path(md)
+      used_ids.add(closest.identifier)
 
   def _matching_front_track(self, corner: Track, front_tracks: dict[int, Track]) -> Track | None:
     matches = []
@@ -1092,7 +1237,8 @@ def main() -> None:
   pm = messaging.PubMaster(['radarState'])
 
   # VW MEB(ID.4/ID.5)만 infiniteCable2식 리드선택. 타 차종은 carrot 원본.
-  RD = RadarD(CP.radarDelay, is_vw_meb=is_volkswagen_meb(CP))
+  enable_carstate_corner_tracks = bool(CP.extFlags & HyundaiExtFlags.CORNER_RADAR_OBJECTS_430.value)
+  RD = RadarD(CP.radarDelay, is_vw_meb=is_volkswagen_meb(CP), enable_carstate_corner_tracks=enable_carstate_corner_tracks)
 
   while 1:
     sm.update()

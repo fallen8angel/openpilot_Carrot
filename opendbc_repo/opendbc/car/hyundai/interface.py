@@ -69,6 +69,9 @@ class CarInterface(CarInterfaceBase):
       if candidate == CAR.KIA_K8_HEV_1ST_GEN and fingerprint[CAN.ACAN].get(0x180) == 32:
         ret.extFlags |= HyundaiExtFlags.CORNER_RADAR_OBJECTS_180.value
         print("##### Corner radar objects 0x180 group detected")
+      if candidate == CAR.HYUNDAI_IONIQ_9 and all(fingerprint[CAN.ACAN].get(addr) == 32 for addr in (0x430, 0x437, 0x440, 0x447)):
+        ret.extFlags |= HyundaiExtFlags.CORNER_RADAR_OBJECTS_430.value
+        print("##### Corner radar objects 0x430/0x440 group detected")
 
       # detect HDA2 with ADAS Driving ECU
       if hda2:
