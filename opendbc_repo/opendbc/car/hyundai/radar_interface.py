@@ -1,4 +1,4 @@
-﻿import math
+import math
 import os
 
 from opendbc import DBC_PATH
@@ -38,9 +38,20 @@ CORNER_OBJECT_430_EMPTY_RAW_VALUES = (0x010d1f40, 0x00010d1f)
 CORNER_OBJECT_430_DEFAULT_DISTANCE_RAW_MIN = 2520  # 126.0 m
 CORNER_OBJECT_430_DEFAULT_DISTANCE_RAW_MAX = 2600  # 130.0 m
 CORNER_OBJECT_430_MAX_DREL = 120.0
-CORNER_OBJECT_430_MAX_TRACKS_PER_SIDE = 12
+CORNER_OBJECT_430_MAX_TRACKS_PER_SIDE = 4
 CORNER_OBJECT_430_DT = 0.05
 CORNER_OBJECT_430_MAX_DREL_DELTA = 1.5
+CORNER_OBJECT_430_CANDIDATE_META_BYTE_3 = (2,)
+CORNER_OBJECT_430_CANDIDATE_EXCLUDED_SLOTS = (1,)
+CORNER_OBJECT_430_CANDIDATE_RAW_DELTA = 200
+CORNER_OBJECT_430_STRONG_META_BYTE_2 = (10,)
+CORNER_OBJECT_430_WEAK_META_BYTE_2 = (5, 6, 7, 8, 9)
+CORNER_OBJECT_430_STRONG_MIN_SUPPORT = 2
+CORNER_OBJECT_430_WEAK_MIN_SUPPORT = 3
+CORNER_OBJECT_430_CLUSTER_RAW_GAP = 200
+CORNER_OBJECT_430_TRACK_MATCH_MAX_DREL_DELTA = 3.0
+CORNER_OBJECT_430_MAX_ABS_VREL = 20.0
+CORNER_OBJECT_430_VREL_ALPHA = 0.35
 
 # POC for parsing corner radars: https://github.com/commaai/openpilot/pull/24221/
 
@@ -451,6 +462,7 @@ class RadarInterface(RadarInterfaceBase):
       (CORNER_OBJECT_430_RIGHT_START_ADDR, -3.2, CORNER_OBJECT_430_MSG_COUNT_PER_SIDE * CORNER_OBJECT_430_SLOTS_PER_MSG),
     )
     for start_addr, y_rel, track_base in bank_defs:
+      bins = []
       for msg_index, addr in enumerate(range(start_addr, start_addr + CORNER_OBJECT_430_MSG_COUNT_PER_SIDE)):
         msg = self.rcp_corner_objects_430.vl[f"CORNER_RADAR_430_OBJECTS_{addr:x}"]
         for slot_index in range(CORNER_OBJECT_430_SLOTS_PER_MSG):
@@ -470,43 +482,124 @@ class RadarInterface(RadarInterfaceBase):
           )
           d_rel = distance_raw * 0.05
           default_distance = CORNER_OBJECT_430_DEFAULT_DISTANCE_RAW_MIN <= distance_raw <= CORNER_OBJECT_430_DEFAULT_DISTANCE_RAW_MAX
-          valid = (
+          base_valid = (
             raw not in CORNER_OBJECT_430_EMPTY_RAW_VALUES and
             distance_raw not in (0, 8000, 8191) and
             not default_distance and
             0.2 < d_rel < CORNER_OBJECT_430_MAX_DREL
           )
+          candidate_valid = (
+            base_valid and
+            slot_index + 1 not in CORNER_OBJECT_430_CANDIDATE_EXCLUDED_SLOTS and
+            code[2] in CORNER_OBJECT_430_CANDIDATE_META_BYTE_3 and
+            code[1] in CORNER_OBJECT_430_STRONG_META_BYTE_2 + CORNER_OBJECT_430_WEAK_META_BYTE_2
+          )
+          bins.append({
+            "msg_index": msg_index,
+            "slot_index": slot_index,
+            "t_id": t_id,
+            "distance_raw": distance_raw,
+            "d_rel": d_rel,
+            "code": code,
+            "candidate_valid": candidate_valid,
+          })
 
-          self.pts[t_id].measured = bool(valid)
-          if not valid:
-            self.corner_object_430_prev_d_rel.pop(t_id, None)
-            self.corner_object_430_prev_v_rel.pop(t_id, None)
-            self.corner_object_430_prev_code.pop(t_id, None)
-            self._clear_point(t_id)
+      supported_bins = []
+      candidates = [b for b in bins if b["candidate_valid"]]
+      for b in candidates:
+        support = 1
+        for other in candidates:
+          if other is b:
             continue
-
-          prev_d_rel = self.corner_object_430_prev_d_rel.get(t_id)
-          prev_code = self.corner_object_430_prev_code.get(t_id)
-          self.corner_object_430_prev_d_rel[t_id] = d_rel
-          self.corner_object_430_prev_code[t_id] = code
-          if prev_d_rel is None or code != prev_code or abs(d_rel - prev_d_rel) > CORNER_OBJECT_430_MAX_DREL_DELTA:
-            self.corner_object_430_prev_v_rel.pop(t_id, None)
-            self._clear_point(t_id)
+          if abs(other["msg_index"] - b["msg_index"]) > 1:
             continue
+          if abs(other["slot_index"] - b["slot_index"]) > 2:
+            continue
+          if abs(other["distance_raw"] - b["distance_raw"]) > CORNER_OBJECT_430_CANDIDATE_RAW_DELTA:
+            continue
+          support += 1
+        min_support = (CORNER_OBJECT_430_STRONG_MIN_SUPPORT if b["code"][1] in CORNER_OBJECT_430_STRONG_META_BYTE_2
+                       else CORNER_OBJECT_430_WEAK_MIN_SUPPORT)
+        if support >= min_support:
+          supported_bins.append({**b, "support": support})
 
-          raw_v_rel = (d_rel - prev_d_rel) / CORNER_OBJECT_430_DT
-          prev_v_rel = self.corner_object_430_prev_v_rel.get(t_id, raw_v_rel)
-          v_rel = 0.5 * prev_v_rel + 0.5 * raw_v_rel
-          self.corner_object_430_prev_v_rel[t_id] = v_rel
+      clusters = []
+      for b in sorted(supported_bins, key=lambda item: item["distance_raw"]):
+        if not clusters or b["distance_raw"] - clusters[-1][-1]["distance_raw"] > CORNER_OBJECT_430_CLUSTER_RAW_GAP:
+          clusters.append([b])
+        else:
+          clusters[-1].append(b)
+      clusters = sorted(clusters, key=lambda cluster: sum(b["distance_raw"] for b in cluster) / len(cluster))[:CORNER_OBJECT_430_MAX_TRACKS_PER_SIDE]
 
-          self.pts[t_id].dRel = d_rel
-          self.pts[t_id].yRel = y_rel
-          self.pts[t_id].vRel = v_rel
-          self.pts[t_id].vLead = v_rel + self.v_ego
-          self.pts[t_id].aRel = float('nan')
-          self.pts[t_id].yvRel = 0.0
+      cluster_objects = []
+      for cluster in clusters:
+        cluster_objects.append({
+          "d_rel": sum(b["d_rel"] for b in cluster) / len(cluster),
+          "code": max((b["code"] for b in cluster), key=lambda code: sum(1 for item in cluster if item["code"] == code)),
+        })
 
-    self._limit_corner_objects_430_per_side()
+      active_t_ids = set()
+      side_track_ids = [
+        CORNER_OBJECT_430_TRACK_ID_OFFSET + track_base + slot
+        for slot in range(CORNER_OBJECT_430_MAX_TRACKS_PER_SIDE)
+      ]
+      unmatched_track_ids = {
+        t_id for t_id in side_track_ids
+        if t_id in self.corner_object_430_prev_d_rel
+      }
+      unused_track_ids = [t_id for t_id in side_track_ids if t_id not in unmatched_track_ids]
+
+      for cluster in cluster_objects:
+        d_rel = cluster["d_rel"]
+        code = cluster["code"]
+        matched_t_id = None
+        if unmatched_track_ids:
+          nearest_t_id = min(unmatched_track_ids, key=lambda t_id: abs(d_rel - self.corner_object_430_prev_d_rel[t_id]))
+          if abs(d_rel - self.corner_object_430_prev_d_rel[nearest_t_id]) <= CORNER_OBJECT_430_TRACK_MATCH_MAX_DREL_DELTA:
+            matched_t_id = nearest_t_id
+            unmatched_track_ids.remove(matched_t_id)
+        if matched_t_id is None and unused_track_ids:
+          matched_t_id = unused_track_ids.pop(0)
+        if matched_t_id is None:
+          continue
+
+        t_id = matched_t_id
+        active_t_ids.add(t_id)
+        prev_d_rel = self.corner_object_430_prev_d_rel.get(t_id)
+        prev_code = self.corner_object_430_prev_code.get(t_id)
+        self.corner_object_430_prev_d_rel[t_id] = d_rel
+        self.corner_object_430_prev_code[t_id] = code
+        if prev_d_rel is None or code != prev_code or abs(d_rel - prev_d_rel) > CORNER_OBJECT_430_MAX_DREL_DELTA:
+          self.corner_object_430_prev_v_rel.pop(t_id, None)
+          self._clear_point(t_id)
+          continue
+
+        raw_v_rel = (d_rel - prev_d_rel) / CORNER_OBJECT_430_DT
+        if abs(raw_v_rel) > CORNER_OBJECT_430_MAX_ABS_VREL:
+          self.corner_object_430_prev_v_rel.pop(t_id, None)
+          self._clear_point(t_id)
+          continue
+        prev_v_rel = self.corner_object_430_prev_v_rel.get(t_id, raw_v_rel)
+        v_rel = (1.0 - CORNER_OBJECT_430_VREL_ALPHA) * prev_v_rel + CORNER_OBJECT_430_VREL_ALPHA * raw_v_rel
+        self.corner_object_430_prev_v_rel[t_id] = v_rel
+
+        self.pts[t_id].measured = True
+        self.pts[t_id].dRel = d_rel
+        self.pts[t_id].yRel = y_rel
+        self.pts[t_id].vRel = v_rel
+        self.pts[t_id].vLead = v_rel + self.v_ego
+        self.pts[t_id].aRel = float('nan')
+        self.pts[t_id].yvRel = 0.0
+
+      side_track_count = CORNER_OBJECT_430_MSG_COUNT_PER_SIDE * CORNER_OBJECT_430_SLOTS_PER_MSG
+      for slot in range(side_track_count):
+        t_id = CORNER_OBJECT_430_TRACK_ID_OFFSET + track_base + slot
+        if t_id in active_t_ids:
+          continue
+        self.corner_object_430_prev_d_rel.pop(t_id, None)
+        self.corner_object_430_prev_v_rel.pop(t_id, None)
+        self.corner_object_430_prev_code.pop(t_id, None)
+        self._clear_point(t_id)
 
   def _clear_point(self, t_id):
     self.pts[t_id].measured = False
