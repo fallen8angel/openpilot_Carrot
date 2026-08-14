@@ -52,6 +52,13 @@ LEAD_ACCEL_DT_S = 0.05
 LEAD_ACCEL_FILTER_ALPHA = (
   LEAD_ACCEL_DT_S / (LEAD_ACCEL_FILTER_TAU_S + LEAD_ACCEL_DT_S)
 )
+STATIONARY_SHADOW_CORNER_MIN_DREL_GATE_M = 7.0
+STATIONARY_SHADOW_CORNER_MAX_DREL_GATE_M = 12.0
+STATIONARY_SHADOW_CORNER_DREL_GATE_FRACTION = 0.15
+STATIONARY_SHADOW_CORNER_MAX_DPATH_M = 1.25
+STATIONARY_SHADOW_CORNER_MAX_DPATH_DELTA_M = 1.25
+STATIONARY_SHADOW_CORNER_MAX_ABS_VLEAD_MPS = 3.0
+STATIONARY_SHADOW_CORNER_MAX_VLEAD_DELTA_MPS = 3.0
 
 
 def _is_corner(point: RadarPointSnapshot) -> bool:
@@ -77,6 +84,45 @@ def _model_ego_speed(model: Any, fallback: float) -> float:
   except (IndexError, TypeError, ValueError):
     return float(fallback)
   return value if math.isfinite(value) else float(fallback)
+
+
+def stationary_shadow_corner_supported(
+  front: RadarPointSnapshot,
+  points: Iterable[RadarPointSnapshot],
+  path: tuple[tuple[float, float], ...],
+) -> bool:
+  """Require an independent slow corner return for a stopped front shadow."""
+  front_d_path = project_to_model_path(
+    path, front.d_rel, front.y_rel,
+  ).d_path
+  d_rel_gate = min(
+    STATIONARY_SHADOW_CORNER_MAX_DREL_GATE_M,
+    max(
+      STATIONARY_SHADOW_CORNER_MIN_DREL_GATE_M,
+      front.d_rel * STATIONARY_SHADOW_CORNER_DREL_GATE_FRACTION,
+    ),
+  )
+  for corner in points:
+    if (
+      not corner.measured
+      or not _is_corner(corner)
+      or abs(corner.v_lead)
+      > STATIONARY_SHADOW_CORNER_MAX_ABS_VLEAD_MPS
+      or abs(front.d_rel - corner.d_rel) > d_rel_gate
+      or abs(front.v_lead - corner.v_lead)
+      > STATIONARY_SHADOW_CORNER_MAX_VLEAD_DELTA_MPS
+    ):
+      continue
+    corner_d_path = project_to_model_path(
+      path, corner.d_rel, corner.y_rel,
+    ).d_path
+    if (
+      abs(corner_d_path) <= STATIONARY_SHADOW_CORNER_MAX_DPATH_M
+      and abs(front_d_path - corner_d_path)
+      <= STATIONARY_SHADOW_CORNER_MAX_DPATH_DELTA_M
+    ):
+      return True
+  return False
 
 
 @dataclass(frozen=True)
@@ -592,19 +638,34 @@ class DPathRadarController:
       ))
     stationary_shadow_inputs = []
     for point, _, projection in front_scoped_motion_points:
-      if point.radar_track_state < 2:
+      identity = (point.source, point.track_id, 0)
+      retained_stationary_shadow = active_identity == identity
+      corner_supported = stationary_shadow_corner_supported(
+        point, points, path,
+      )
+      if (
+        point.radar_track_state < 2
+        or not (corner_supported or retained_stationary_shadow)
+      ):
         continue
       lead = self._lead_from_radar_point(
         point, projection.d_path, 0.03, primary_cut_out_probability,
       )
-      stationary_shadow_inputs.append(DPathLeadCandidate(
+      candidate = DPathLeadCandidate(
         lead=lead,
         source=point.source,
         track_id=point.track_id,
         continuity_id=0,
         retainable=True,
         confirmed_cutin=False,
-      ))
+      )
+      if corner_supported:
+        stationary_shadow_inputs.append(candidate)
+      if (
+        retained_stationary_shadow
+        and point.track_id != primary_track_id
+      ):
+        candidates.append(candidate)
     stationary_shadow = self.stationary_shadow_tracker.update(
       time_s,
       lead_one,

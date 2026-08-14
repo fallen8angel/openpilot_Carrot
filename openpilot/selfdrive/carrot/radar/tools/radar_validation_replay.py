@@ -48,6 +48,7 @@ from openpilot.selfdrive.carrot.radar_motion import (
   match_dpath_primary_lead,
   prefer_front_radar_kinematics,
   radar_motion_sensitivity,
+  stationary_shadow_corner_supported,
   model_path_point_at_s,
   project_to_model_path,
   visible_motion_points,
@@ -1338,21 +1339,37 @@ class RadarMotionShadowSelector:
       for point in visible_motion_points(
         front_motion_points, frame.path, None,
       ):
-        if point.radar_track_state < 2:
+        identity = (point.source, point.track_id, 0)
+        retained_stationary_shadow = active_identity == identity
+        corner_supported = stationary_shadow_corner_supported(
+          point, all_aligned_points, frame.path,
+        )
+        if (
+          point.radar_track_state < 2
+          or not (corner_supported or retained_stationary_shadow)
+        ):
           continue
         d_path = project_to_model_path(
           frame.path, point.d_rel, point.y_rel,
         ).d_path
-        stationary_shadow_inputs.append(DPathLeadCandidate(
-          lead=lead_from_radar_point(
-            point, d_path, 0.03, primary_cut_out_probability,
-          ),
+        lead = lead_from_radar_point(
+          point, d_path, 0.03, primary_cut_out_probability,
+        )
+        candidate = DPathLeadCandidate(
+          lead=lead,
           source=point.source,
           track_id=point.track_id,
           continuity_id=0,
           retainable=True,
           confirmed_cutin=False,
-        ))
+        )
+        if corner_supported:
+          stationary_shadow_inputs.append(candidate)
+        if (
+          retained_stationary_shadow
+          and point.track_id != primary_track_id
+        ):
+          lead_candidates.append(candidate)
       stationary_shadow = stationary_shadow_tracker.update(
         frame.time_s,
         lead_one,
