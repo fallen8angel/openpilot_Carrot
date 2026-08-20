@@ -25,6 +25,16 @@ PRIMARY_DUPLICATE_MAX_YREL_DELTA_M = 1.8
 PRIMARY_ROW_MAX_DREL_DELTA_M = 8.0
 CUTIN_PRIMARY_FUTURE_MARGIN_M = 2.0
 FRONT_CUT_IN_MIN_DPATH_RATE_MPS = 0.75
+# Front-radar azimuth is coarse enough that a parallel adjacent target can
+# appear to move inward by nearly a metre without actually approaching the
+# ego corridor. Do not control on a forecast-only entry until the measured
+# target body is within 0.40 m of the path-overlap boundary.
+FRONT_PREDICTED_CUTIN_MAX_ABS_DPATH_M = 2.20
+CORNER_FAR_CUTIN_MAX_ABS_DPATH_M = 2.20
+CORNER_FAR_CUTIN_MIN_LONG_INWARD_MPS = 0.65
+CORNER_FAR_CUTIN_MIN_CLOSING_SPEED_MPS = 3.0
+CORNER_DISTANT_CURRENT_PATH_MIN_DREL_M = 45.0
+CORNER_DISTANT_CURRENT_PATH_MIN_INWARD_DISPLACEMENT_M = 0.35
 FRONT_NEAR_PATH_MAX_DREL_M = 10.0
 FRONT_NEAR_PATH_MIN_SHORT_INWARD_MPS = 0.50
 FRONT_NEAR_PATH_MIN_LONG_INWARD_MPS = 0.20
@@ -317,6 +327,7 @@ def front_cutin_motion_supported(
   d_path_rate_long: float,
   *,
   d_rel: float = math.inf,
+  v_rel: float = 0.0,
   d_path: float = 0.0,
   d_path_rate_short: float = 0.0,
   reported_normal_speed: float = 0.0,
@@ -330,6 +341,36 @@ def front_cutin_motion_supported(
 ) -> bool:
   """Require strong motion or sustained direction-supported overlap from front."""
   if source != "frontRadar":
+    side = (
+      math.copysign(1.0, float(d_path))
+      if abs(float(d_path)) > 1e-6
+      else 0.0
+    )
+    if (
+      source.startswith("corner")
+      and not current_path_occupancy
+      and abs(float(d_path)) > CORNER_FAR_CUTIN_MAX_ABS_DPATH_M
+    ):
+      return (
+        -side * float(d_path_rate_long)
+        >= CORNER_FAR_CUTIN_MIN_LONG_INWARD_MPS
+        or float(v_rel) <= -CORNER_FAR_CUTIN_MIN_CLOSING_SPEED_MPS
+      )
+    if (
+      source.startswith("corner")
+      and current_path_occupancy
+      and float(d_rel) >= CORNER_DISTANT_CURRENT_PATH_MIN_DREL_M
+    ):
+      return (
+        float(directional_inward_displacement_m)
+        >= CORNER_DISTANT_CURRENT_PATH_MIN_INWARD_DISPLACEMENT_M
+        and float(directional_consistency)
+        >= float(minimum_directional_consistency)
+        and float(directional_inward_sample_ratio)
+        >= DIRECTIONAL_MIN_INWARD_SAMPLE_RATIO
+        and -side * float(d_path_rate_long)
+        >= DIRECTIONAL_MIN_LONG_INWARD_RATE_MPS
+      )
     return True
   side = (
     math.copysign(1.0, float(d_path))
@@ -338,10 +379,14 @@ def front_cutin_motion_supported(
   )
   if tracked_close_entry:
     return True
+  measured_near_path = (
+    abs(float(d_path)) <= FRONT_PREDICTED_CUTIN_MAX_ABS_DPATH_M
+  )
   # Front-radar azimuth quantization can create a high one-second dPath rate
   # for a parallel vehicle. Do not bypass the measured direction history.
   strong_directional_motion = (
-    -side * float(d_path_rate_long)
+    measured_near_path
+    and -side * float(d_path_rate_long)
     >= FRONT_CUT_IN_MIN_DPATH_RATE_MPS
     and float(directional_consistency)
     >= float(minimum_directional_consistency)
@@ -352,7 +397,8 @@ def front_cutin_motion_supported(
     return True
 
   directional_future_overlap = (
-    float(d_rel) >= FRONT_CUT_IN_MIN_DREL_M
+    measured_near_path
+    and float(d_rel) >= FRONT_CUT_IN_MIN_DREL_M
     and float(predicted_path_overlap_s)
     >= FULL_PREDICTED_PATH_OVERLAP_SUPPORT_S
     and float(directional_inward_displacement_m)
@@ -434,7 +480,9 @@ class DPathLeadTwoTracker:
       candidate
       for candidate in candidate_values
       if (
-        candidate.identity == self.active_identity
+        self.active_identity is not None
+        and candidate.source == self.active_identity[0]
+        and candidate.continuity_id == self.active_identity[2]
         and candidate.retainable
         and self._position_continuous(time_s, candidate)
       )
