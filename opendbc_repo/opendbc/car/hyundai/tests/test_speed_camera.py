@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from opendbc.car.hyundai.carstate import CarState, VEHICLE_SPEED_CAMERA_PARAM_UPDATE_FRAMES
+from opendbc.car.hyundai.carstate import CarState, VEHICLE_NAVI_SCHOOL_ZONE_MAX_DISTANCE, VEHICLE_SPEED_CAMERA_PARAM_UPDATE_FRAMES
 
 
 class FakeParams:
@@ -38,7 +38,11 @@ def _car_state(distance_time_tenths=60):
   state.vehicleNaviProfileTimestamp = 0
   state.vehicleNaviRouteResetTimestamp = 0
   state.vehicleNaviCameraTarget = None
+  state.vehicleNaviSpeedZoneActive = False
+  state.vehicleNaviSpeedZoneSpeed = 0.0
   state.vehicleNaviSchoolZoneActive = False
+  state.vehicleNaviSchoolZoneStartDistance = 0.0
+  state.vehicleNaviSchoolZoneUsesCameraStatus = False
   state.navi_segment_4b9 = None
   state.navi_profile_4be = None
   return state
@@ -141,6 +145,7 @@ def test_vehicle_speed_camera_distance_requires_valid_camera_speed(speed_limit, 
   (0x71, ("camera", 30, 1)),
   (0xD1, ("camera", 60, 1)),
   (0xF2, ("camera", 70, 2)),
+  (0x150, ("camera", 100, 0)),
   (0x06, ("bump", 0, 6)),
   (0x07, None),
   (0xffffffff, None),
@@ -153,6 +158,7 @@ def test_vehicle_navi_profile_classification(value, expected):
 @pytest.mark.parametrize(("value", "expected"), (
   (0x77, ("speed_limit_zone", 30, 7)),
   (0xB7, ("speed_limit_zone", 50, 7)),
+  (0x157, ("speed_limit_zone", 100, 7)),
 ))
 def test_vehicle_navi_speed_limit_zone_classification(value, expected):
   profile = {"profile_type": 16, "value": value, "offset": 0}
@@ -187,19 +193,19 @@ def test_vehicle_navi_route_recalculation_clears_events():
   cp = SimpleNamespace(ts_nanos={"NEW_MSG_4BE": {"PROLONG_VALUE": 1}})
   ret = SimpleNamespace(speedLimit=0.0, speedBumpDistance=0.0, schoolZoneActive=False)
 
-  assert not state._update_vehicle_navi_events(cp, ret)
+  assert not state._update_vehicle_navi_events(cp, ret, False)
   assert ret.speedBumpDistance == pytest.approx(890.0)
 
   raw = bytes.fromhex("0000b8063110fdff")
   state.navi_segment_4b9 = {f"BYTE_{i + 1}": byte for i, byte in enumerate(raw)}
   cp.ts_nanos["NEW_MSG_4B9"] = {"BYTE_1": 2}
-  state._update_vehicle_navi_events(cp, ret)
+  state._update_vehicle_navi_events(cp, ret, False)
 
   assert state.vehicleNaviEvents == []
   assert ret.speedBumpDistance == 0.0
 
 
-def test_vehicle_navi_school_zone_caps_at_30_until_exit():
+def test_vehicle_navi_school_zone_follows_vehicle_camera_status():
   state = _car_state()
   state.vehicleNaviSchoolZoneControl = True
   state.navi_profile_4be = {
@@ -212,24 +218,76 @@ def test_vehicle_navi_school_zone_caps_at_30_until_exit():
   cp = SimpleNamespace(ts_nanos={"NEW_MSG_4BE": {"PROLONG_VALUE": 1}})
   ret = SimpleNamespace(speedLimit=0.0, speedBumpDistance=0.0, schoolZoneActive=False)
 
-  assert not state._update_vehicle_navi_events(cp, ret)
+  ret.speedLimit = 30.0
+  assert not state._update_vehicle_navi_events(cp, ret, True)
+  assert ret.schoolZoneActive
+  assert ret.speedLimit == 30
+  assert state.vehicleNaviSchoolZoneUsesCameraStatus
+
+  # 00000d87--35927b43c4: 0x77 is followed by an invalid profile, not 0xB7.
+  state.navi_profile_4be.update({
+    "PROLONG_VALUE": 0xffffffff,
+    "PROLONG_OFFSET": 8191,
+    "PROLONG_PROFILE_TYPE": 31,
+  })
+  cp.ts_nanos["NEW_MSG_4BE"]["PROLONG_VALUE"] = 2
+  ret.speedLimit = 30.0
+  assert not state._update_vehicle_navi_events(cp, ret, True)
   assert ret.schoolZoneActive
   assert ret.speedLimit == 30
 
+  ret.speedLimit = 0.0
+  assert not state._update_vehicle_navi_events(cp, ret, False)
+  assert not ret.schoolZoneActive
+  assert not state.vehicleNaviSchoolZoneActive
+
+
+def test_vehicle_navi_school_zone_explicit_speed_change_clears_cap():
+  state = _car_state()
+  state.vehicleNaviSchoolZoneControl = True
+  state.vehicleNaviSchoolZoneActive = True
+  state.navi_profile_4be = {
+    "PROLONG_VALUE": 0xB7,
+    "PROLONG_OFFSET": 0,
+    "PROLONG_CYCLIC_COUNTER": 3,
+    "PROLONG_UPDATE": 1,
+    "PROLONG_PROFILE_TYPE": 16,
+  }
+  cp = SimpleNamespace(ts_nanos={"NEW_MSG_4BE": {"PROLONG_VALUE": 1}})
+  ret = SimpleNamespace(speedLimit=50.0, speedBumpDistance=0.0, schoolZoneActive=False)
+
+  assert not state._update_vehicle_navi_events(cp, ret, False)
+  assert not ret.schoolZoneActive
+  assert not state.vehicleNaviSchoolZoneActive
+
+
+def test_vehicle_navi_route_recalculation_clears_school_zone():
+  state = _car_state()
+  state.vehicleNaviSchoolZoneControl = True
+  state.vehicleNaviSchoolZoneActive = True
+  state.vehicleNaviSchoolZoneStartDistance = 10.0
   raw = bytes.fromhex("0000b8063110fdff")
   state.navi_segment_4b9 = {f"BYTE_{i + 1}": byte for i, byte in enumerate(raw)}
-  cp.ts_nanos["NEW_MSG_4B9"] = {"BYTE_1": 2}
-  ret.speedLimit = 0.0
-  assert not state._update_vehicle_navi_events(cp, ret)
-  assert ret.schoolZoneActive
-  assert ret.speedLimit == 30
+  cp = SimpleNamespace(ts_nanos={"NEW_MSG_4B9": {"BYTE_1": 2}})
+  ret = SimpleNamespace(speedLimit=30.0, speedBumpDistance=0.0, schoolZoneActive=False)
 
-  state.navi_profile_4be["PROLONG_VALUE"] = 0xB7
-  cp.ts_nanos["NEW_MSG_4BE"]["PROLONG_VALUE"] = 3
-  ret.speedLimit = 0.0
-  assert not state._update_vehicle_navi_events(cp, ret)
+  assert not state._update_vehicle_navi_events(cp, ret, True)
   assert not ret.schoolZoneActive
-  assert ret.speedLimit == 0.0
+  assert not state.vehicleNaviSchoolZoneActive
+
+
+def test_vehicle_navi_school_zone_distance_fail_safe():
+  state = _car_state()
+  state.vehicleNaviSchoolZoneControl = True
+  state.vehicleNaviSchoolZoneActive = True
+  state.vehicleNaviSchoolZoneStartDistance = 10.0
+  state.totalDistance = 10.0 + VEHICLE_NAVI_SCHOOL_ZONE_MAX_DISTANCE
+  cp = SimpleNamespace(ts_nanos={})
+  ret = SimpleNamespace(speedLimit=0.0, speedBumpDistance=0.0, schoolZoneActive=False)
+
+  assert not state._update_vehicle_navi_events(cp, ret, False)
+  assert not ret.schoolZoneActive
+  assert not state.vehicleNaviSchoolZoneActive
 
 
 def test_vehicle_navi_exact_camera_distance_replaces_virtual_distance():
@@ -242,3 +300,61 @@ def test_vehicle_navi_exact_camera_distance_replaces_virtual_distance():
   state.update_speed_limit(ret, speed_limit_cam=True)
 
   assert ret.speedLimitDistance == pytest.approx(300.0 - 10.0 * 0.01)
+
+
+def test_vehicle_navi_section_log_frames_hold_cap_until_camera_status_ends():
+  state = _car_state()
+  state.vehicleNaviCanControl = True
+  state.navi_profile_4be = {
+    "PROLONG_VALUE": 0x157,
+    "PROLONG_OFFSET": 0,
+    "PROLONG_CYCLIC_COUNTER": 3,
+    "PROLONG_UPDATE": 1,
+    "PROLONG_PROFILE_TYPE": 16,
+  }
+  cp = SimpleNamespace(ts_nanos={"NEW_MSG_4BE": {"PROLONG_VALUE": 1}})
+  ret = SimpleNamespace(speedLimit=100.0, speedBumpDistance=0.0, schoolZoneActive=False)
+
+  assert not state._update_vehicle_navi_events(cp, ret, True)
+  assert state.vehicleNaviSpeedZoneActive
+  assert ret.vehicleNaviActive
+  assert ret.vehicleNaviSectionActive
+  assert ret.vehicleNaviSpeed == 100
+
+  # The valid burst is followed by 0xff; it must not drop the section latch.
+  state.navi_profile_4be.update({
+    "PROLONG_VALUE": 0xffffffff,
+    "PROLONG_OFFSET": 8191,
+    "PROLONG_PROFILE_TYPE": 31,
+  })
+  cp.ts_nanos["NEW_MSG_4BE"]["PROLONG_VALUE"] = 2
+  assert not state._update_vehicle_navi_events(cp, ret, True)
+  assert ret.vehicleNaviSectionActive
+
+  assert not state._update_vehicle_navi_events(cp, ret, False)
+  assert not state.vehicleNaviSpeedZoneActive
+  assert not ret.vehicleNaviActive
+  assert not ret.vehicleNaviSectionActive
+
+
+def test_vehicle_navi_section_end_camera_uses_logged_1997_meter_offset():
+  state = _car_state()
+  state.vehicleNaviCanControl = True
+  state.navi_profile_4be = {
+    "PROLONG_VALUE": 0x150,
+    "PROLONG_OFFSET": 1997,
+    "PROLONG_CYCLIC_COUNTER": 3,
+    "PROLONG_UPDATE": 1,
+    "PROLONG_PROFILE_TYPE": 16,
+  }
+  cp = SimpleNamespace(ts_nanos={"NEW_MSG_4BE": {"PROLONG_VALUE": 1}})
+  ret = SimpleNamespace(speedLimit=100.0, speedBumpDistance=0.0, schoolZoneActive=False)
+
+  assert state._update_vehicle_navi_events(cp, ret, True)
+  assert ret.vehicleNaviActive
+  assert ret.vehicleNaviSpeed == 100
+  assert state.vehicleNaviCameraTarget == pytest.approx(1997.0)
+
+  speed_ret = SimpleNamespace(vEgo=10.0, speedLimit=ret.speedLimit, gasPressed=False)
+  state.update_speed_limit(speed_ret, speed_limit_cam=True)
+  assert speed_ret.speedLimitDistance == pytest.approx(1997.0 - 10.0 * 0.01)

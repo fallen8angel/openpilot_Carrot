@@ -5,6 +5,7 @@ import pyray as rl
 from dataclasses import dataclass
 from typing import Optional
 from openpilot.common.constants import CV
+from openpilot.selfdrive.carrot.deceleration_source import deceleration_source_presentation
 # from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar # 아이콘에 토크 적용: 토크바 미사용
 from openpilot.selfdrive.ui.mici.onroad import blend_colors
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -39,7 +40,7 @@ class SetSpeedOverrideState:
   active: bool
   speed_kph: float
   label: str
-  speed_color_mode: int # 0: white, 1: green, 2: orange
+  speed_color_mode: int # 0: white, 1: eco green, 2: orange, 3: vehicle-navigation blue, 4: external-navigation green
   force_persist: bool
 
 
@@ -62,7 +63,24 @@ class SetSpeedOverride:
         force_persist=True,   # eco 조건 유지되는 동안 계속 표시
       )
 
-    # 2) apply_speed (desiredSpeed/source)
+    # 2) a valid vehicle-navigation CAN profile is informational even with ACC off.
+    try:
+      vehicle_navi_active = bool(sm['carrotMan'].vehicleNaviActive)
+      vehicle_navi_speed = float(sm['carrotMan'].vehicleNaviSpeed)
+    except Exception:
+      vehicle_navi_active = False
+      vehicle_navi_speed = 0.0
+
+    if vehicle_navi_active and 0 < vehicle_navi_speed < 200:
+      return SetSpeedOverrideState(
+        active=True,
+        speed_kph=vehicle_navi_speed,
+        label="vNAVI",
+        speed_color_mode=3,
+        force_persist=True,
+      )
+
+    # 3) apply_speed (desiredSpeed/source)
     desired_speed = None
     desired_source = ""
     try:
@@ -73,17 +91,16 @@ class SetSpeedOverride:
       desired_source = ""
 
     if desired_speed is not None and 0 < desired_speed < 200 and desired_speed < set_speed_kph:
-      label = desired_source.strip() or "apply"
-      label = label[:8]  # 너무 길면 UI 깨짐 방지 (원하면 길이 조절)
+      label, speed_color_mode = deceleration_source_presentation(desired_source)
       return SetSpeedOverrideState(
         active=True,
         speed_kph=desired_speed,
         label=label,
-        speed_color_mode=2,
+        speed_color_mode=speed_color_mode,
         force_persist=True,   # 조건 유지되는 동안 계속 표시
       )
 
-    # 3) default
+    # 4) default
     return SetSpeedOverrideState(
       active=False,
       speed_kph=set_speed_kph,
@@ -294,7 +311,35 @@ class HudRenderer(Widget):
 
     self._draw_steering_wheel(rect)
 
+    self._draw_egpu_badge(rect)
+
     self._draw_cruise_speed_animation(rect)
+
+  def _draw_egpu_badge(self, rect: rl.Rectangle) -> None:
+    if not ui_state.usbgpu_active:
+      return
+
+    text = "eGPU"
+    font_size = 22
+    text_size = measure_text_cached(self._font_semi_bold, text, font_size)
+    pad_x, pad_y = 10, 5
+    badge = rl.Rectangle(
+      rect.x + rect.width / 2 - text_size.x / 2 - pad_x,
+      rect.y + 12,
+      text_size.x + pad_x * 2,
+      text_size.y + pad_y * 2,
+    )
+    green = rl.Color(0, 255, 0, 230)
+    rl.draw_rectangle_rounded(badge, 0.35, 8, rl.Color(0, 0, 0, 150))
+    rl.draw_rectangle_rounded_lines_ex(badge, 0.35, 8, 2, green)
+    rl.draw_text_ex(
+      self._font_semi_bold,
+      text,
+      rl.Vector2(badge.x + pad_x, badge.y + pad_y),
+      font_size,
+      0,
+      green,
+    )
 
   def _update_cruise_speed_animation(self, cruise_text: str) -> None:
     if self._cruise_speed_text_last == cruise_text:
@@ -742,6 +787,10 @@ class HudRenderer(Widget):
           set_color = rl.Color(0, 255, 0, 230)
         elif ov.speed_color_mode == 2:    # apply
           set_color = rl.Color(255, 165, 0, 230)
+        elif ov.speed_color_mode == 3:    # vehicle navigation CAN
+          set_color = rl.Color(38, 132, 255, 230)
+        elif ov.speed_color_mode == 4:    # external navigation
+          set_color = rl.Color(0, 255, 0, 230)
         else:
           set_color = rl.Color(0, 255, 0, 230)   # your sample is green
 

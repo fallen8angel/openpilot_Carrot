@@ -12,6 +12,7 @@ sys.path.insert(0, str(CLUSTER_DIR))
 from cluster_live import (
   LIVE_SERVICES_BASE,
   OpenpilotLiveSource,
+  deceleration_source_presentation,
   deceleration_source_display_label,
   standby_state,
 )
@@ -22,13 +23,16 @@ from cluster_models import ClusterAlert
 @pytest.mark.parametrize(
   ("source", "expected"),
   (
-    ("cam", "cam:n"),
-    ("hda", "cam:v"),
-    ("route", "route:v"),
+    ("cam", "NAVI"),
+    ("hda", "vNAVI"),
+    ("hda_section", "vNAVI"),
+    ("hda_bump", "vNAVI"),
+    ("school", "vNAVI"),
+    ("route", "NAVI"),
     ("vturn", "turn:c"),
     ("model", "turn:c"),
-    ("atc", "turn:n"),
-    ("section", "section:n"),
+    ("atc", "NAVI"),
+    ("section", "NAVI"),
     ("longsource:c", "longsource:c"),
     ("custom-source", "custom-s"),
     (None, "apply"),
@@ -39,15 +43,18 @@ def test_deceleration_source_display_label(source, expected) -> None:
 
 
 @pytest.mark.parametrize(
-  ("desired_source", "expected_label"),
+  ("desired_source", "expected_label", "expected_mode"),
   (
-    ("cam", "cam:n"),
-    ("hda", "cam:v"),
-    ("route", "route:v"),
-    ("model", "turn:c"),
+    ("cam", "NAVI", 4),
+    ("hda", "vNAVI", 3),
+    ("hda_section", "vNAVI", 3),
+    ("hda_bump", "vNAVI", 3),
+    ("school", "vNAVI", 3),
+    ("route", "NAVI", 4),
+    ("model", "turn:c", 2),
   ),
 )
-def test_live_deceleration_override_adds_source_origin(desired_source, expected_label) -> None:
+def test_live_deceleration_override_presents_navigation_origin(desired_source, expected_label, expected_mode) -> None:
   source = object.__new__(OpenpilotLiveSource)
   source._max_lateral_accel = 3.0
   source._energy_gauge_label = "fuel"
@@ -62,7 +69,91 @@ def test_live_deceleration_override_adds_source_origin(desired_source, expected_
 
   assert decorated.cruise_override_kph == 55.0
   assert decorated.cruise_override_label == expected_label
-  assert decorated.cruise_override_color_mode == 2
+  assert decorated.cruise_override_color_mode == expected_mode
+
+
+def test_live_hud_reads_active_egpu_param(monkeypatch) -> None:
+  source = object.__new__(OpenpilotLiveSource)
+  source._max_lateral_accel = 3.0
+  source._energy_gauge_label = "fuel"
+  source._carrot_navi_media = None
+  source._current_carrot_navi = lambda _now: None
+  source.params = SimpleNamespace(get_bool=lambda key: key == "UsbGpuActive")
+  source._service_data = lambda _service: None
+  source._service_alive = lambda _service: False
+  monkeypatch.setattr(cluster_live.time, "monotonic", lambda: 100.0)
+
+  decorated = source._with_live_hud_state(standby_state())
+
+  assert decorated.egpu_active
+
+
+def test_vehicle_navigation_presentation_is_blue() -> None:
+  assert deceleration_source_presentation("hda") == ("vNAVI", 3)
+  assert deceleration_source_presentation("hda_section") == ("vNAVI", 3)
+  assert deceleration_source_presentation("hda_bump") == ("vNAVI", 3)
+  assert deceleration_source_presentation("school") == ("vNAVI", 3)
+
+
+def test_vehicle_navigation_profile_displays_with_cruise_off() -> None:
+  source = object.__new__(OpenpilotLiveSource)
+  source._max_lateral_accel = 3.0
+  source._energy_gauge_label = "fuel"
+  source._carrot_navi_media = None
+  source._current_carrot_navi = lambda _now: None
+  carrot_man = SimpleNamespace(
+    activeCarrot=0,
+    desiredSpeed=250.0,
+    desiredSource="none",
+    vehicleNaviActive=True,
+    vehicleNaviSpeed=105,
+  )
+  source._service_data = lambda service: carrot_man if service == "carrotMan" else None
+  source._service_alive = lambda _service: False
+  source._service_valid = lambda _service: False
+
+  decorated = source._with_live_hud_state(standby_state())
+
+  assert decorated.cruise_display_state == "off"
+  assert decorated.cruise_override_kph == 105
+  assert decorated.cruise_override_label == "vNAVI"
+  assert decorated.cruise_override_color_mode == 3
+
+
+def test_external_navigation_presentation_is_green() -> None:
+  assert deceleration_source_presentation("cam") == ("NAVI", 4)
+  assert deceleration_source_presentation("bump") == ("NAVI", 4)
+  assert deceleration_source_presentation("route") == ("NAVI", 4)
+
+
+@pytest.mark.parametrize(
+  ("active_carrot", "desired_source", "guidance_active", "expected"),
+  (
+    (5, "hda_bump", False, False),
+    (6, "school", False, False),
+    (3, "hda", False, False),
+    (3, "cam", False, True),
+    (5, "bump", False, True),
+    (5, "hda_bump", True, True),
+  ),
+)
+def test_vehicle_navigation_does_not_replace_driving_report(
+  active_carrot, desired_source, guidance_active, expected,
+) -> None:
+  source = object.__new__(OpenpilotLiveSource)
+  source._max_lateral_accel = 3.0
+  source._energy_gauge_label = "fuel"
+  source._carrot_navi_media = None
+  navi_live = SimpleNamespace(current=object(), status=None, speed=None) if guidance_active else None
+  source._current_carrot_navi = lambda _now: navi_live
+  carrot_man = SimpleNamespace(activeCarrot=active_carrot, desiredSpeed=55.0, desiredSource=desired_source)
+  source._service_data = lambda service: carrot_man if service == "carrotMan" else None
+  source._service_alive = lambda _service: False
+  source._service_valid = lambda _service: False
+
+  decorated = source._with_live_hud_state(replace(standby_state(), cruise_kph=100, cruise_display_state="engaged"))
+
+  assert decorated.external_nav_active is expected
 
 
 @pytest.mark.parametrize(
