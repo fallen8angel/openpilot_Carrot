@@ -29,8 +29,10 @@ VEHICLE_NAVI_PASSED_EVENT_DISTANCE = 30.0
 VEHICLE_NAVI_MAX_EVENTS = 32
 VEHICLE_NAVI_CAMERA_KINDS = (0, 1, 2)
 VEHICLE_NAVI_SCHOOL_ZONE_MAX_DISTANCE = 1000.0
+VEHICLE_NAVI_POSITION_TIMEOUT_NS = 1_000_000_000
 STANDSTILL_THRESHOLD = 12 * 0.03125 * CV.KPH_TO_MS
 CANFD_AVH_RELEASE_GRACE_FRAMES = round(0.5 / DT_CTRL)
+CANFD_AVH_LAMP_ACTIVE = 2
 
 BUTTONS_DICT = {Buttons.RES_ACCEL: ButtonType.accelCruise, Buttons.SET_DECEL: ButtonType.decelCruise,
                 Buttons.GAP_DIST: ButtonType.gapAdjustCruise, Buttons.CANCEL: ButtonType.cancel, Buttons.LFA_BUTTON: ButtonType.lfaButton}
@@ -53,22 +55,20 @@ def is_canfd_parking_brake_active(parking_brake_state: int) -> bool:
   return parking_brake_state == 1
 
 
-def update_canfd_avh_interlock_state(avh_state: int, acc_req: int, brake_pressed: bool, avh_active_prev: bool,
-                                     oem_hold_latched: bool, release_grace_frames: int) -> tuple[bool, bool, int]:
-  """Separate an OEM AutoHold from an openpilot SCC-induced hydraulic hold.
+def update_canfd_auto_hold_interlock_state(avh_state: int, avh_lamp: int, oem_hold_latched: bool,
+                                           release_grace_frames: int) -> tuple[bool, int]:
+  """Track an OEM AutoHold without confusing SCC-induced hydraulic holds.
 
-  AVH_Sta reports who is physically holding the service brake, not whether the
-  AutoHold button is enabled. An OEM hold begins while the driver brake signal
-  is asserted and before TCS.ACC_REQ, while cruise stops and soft hold assert
-  AVH without the driver brake signal. Keep an OEM classification across short
-  AVH dropouts so automatic cruise cannot reopen the interlock during a
-  transition.
+  AVH_Sta reports the hydraulic service-brake state and is also asserted by
+  openpilot longitudinal control. AVH_LAMP identifies the OEM AutoHold state:
+  2 is actively holding and 3 is ready/releasing. Start the interlock only from
+  the active lamp state, then retain it through AVH release and short dropouts.
   """
-  avh_active = is_canfd_avh_active(avh_state)
-  if avh_active:
-    if not avh_active_prev and not oem_hold_latched:
-      oem_hold_latched = brake_pressed and acc_req != 1
-    release_grace_frames = CANFD_AVH_RELEASE_GRACE_FRAMES if oem_hold_latched else 0
+  if avh_lamp == CANFD_AVH_LAMP_ACTIVE:
+    oem_hold_latched = True
+    release_grace_frames = CANFD_AVH_RELEASE_GRACE_FRAMES
+  elif oem_hold_latched and avh_state == 2:
+    release_grace_frames = CANFD_AVH_RELEASE_GRACE_FRAMES
   elif oem_hold_latched:
     release_grace_frames = max(0, release_grace_frames - 1)
     if release_grace_frames == 0:
@@ -76,7 +76,7 @@ def update_canfd_avh_interlock_state(avh_state: int, acc_req: int, brake_pressed
   else:
     release_grace_frames = 0
 
-  return oem_hold_latched, avh_active, release_grace_frames
+  return oem_hold_latched, release_grace_frames
 
 
 def _get_legacy_button_capabilities(fingerprint: dict[int, int]) -> tuple[bool, bool, bool]:
@@ -171,6 +171,7 @@ class CarState(CarStateBase):
     self.adrv_0x160 = None
     self.ccnc_0x162 = None
     self.hda_info_4a3 = None
+    self.navi_position_4b4 = None
     self.navi_segment_4b9 = None
     self.navi_profile_4be = None
     self.tcs = None
@@ -207,6 +208,7 @@ class CarState(CarStateBase):
     self.vehicleNaviEvents = []
     self.vehicleNaviSegmentTimestamp = 0
     self.vehicleNaviProfileTimestamp = 0
+    self.vehicleNaviAvailable = False
     self.vehicleNaviRouteResetTimestamp = 0
     self.vehicleNaviCameraTarget = None
     self.vehicleNaviSpeedZoneActive = False
@@ -220,7 +222,6 @@ class CarState(CarStateBase):
     self.ACCMode = 0
     self.LFA_ICON = 0
     self.paddle_button_prev = 0
-    self.canfdAvhActivePrev = False
     self.canfdOemBrakeHoldLatched = False
     self.canfdAvhReleaseGraceFrames = 0
 
@@ -370,6 +371,7 @@ class CarState(CarStateBase):
           add_and_cache(self.cp_cam, "CCNC_0x162", "ccnc_0x162")
         elif self.controls_ready_count == 123:
           add_and_cache(self.cp, "HDA_INFO_4A3", "hda_info_4a3")
+          add_and_cache(self.cp, "NEW_MSG_4B4", "navi_position_4b4")
           add_and_cache(self.cp, "NEW_MSG_4B9", "navi_segment_4b9")
           add_and_cache(self.cp, "NEW_MSG_4BE", "navi_profile_4be")
           add_and_cache(self.cp, "STEER_TOUCH_2AF", "steer_touch_2af")
@@ -695,9 +697,24 @@ class CarState(CarStateBase):
     ret.vehicleNaviActive = False
     ret.vehicleNaviSectionActive = False
     ret.vehicleNaviSpeed = 0.0
+    profile_timestamp = self._vehicle_navi_message_timestamp(cp, "NEW_MSG_4BE")
+    self.vehicleNaviAvailable = self.vehicleNaviAvailable or profile_timestamp > 0
+    ret.vehicleNaviAvailable = self.vehicleNaviAvailable
     self.vehicleNaviCameraTarget = None
     if not (self.vehicleNaviCanControl or self.vehicleNaviSchoolZoneControl):
       return False
+
+    # 0x4B4 is periodic while the stock navigation is running. Its range
+    # average speed is zero outside a section-camera zone and valid inside it.
+    # It is therefore authoritative for the *current* section state; 0x4BE is
+    # sparse future spot data and must not be used alone to hold this state.
+    position_timestamp = self._vehicle_navi_message_timestamp(cp, "NEW_MSG_4B4")
+    position_seen = position_timestamp > 0
+    position_age = getattr(cp, "_last_update_nanos", position_timestamp) - position_timestamp
+    position_recent = position_seen and 0 <= position_age <= VEHICLE_NAVI_POSITION_TIMEOUT_NS
+    range_avg_speed = (int(self.navi_position_4b4.get("POS_RANGE_AVG_SPEED", 0))
+                       if position_recent and self.navi_position_4b4 is not None else 0)
+    range_section_active = 0 < range_avg_speed < 511
 
     if self.navi_segment_4b9 is not None:
       timestamp = self._vehicle_navi_message_timestamp(cp, "NEW_MSG_4B9")
@@ -711,7 +728,7 @@ class CarState(CarStateBase):
           self._clear_vehicle_navi_school_zone()
 
     if self.navi_profile_4be is not None:
-      timestamp = self._vehicle_navi_message_timestamp(cp, "NEW_MSG_4BE")
+      timestamp = profile_timestamp
       if timestamp > self.vehicleNaviProfileTimestamp:
         self.vehicleNaviProfileTimestamp = timestamp
         profile = self._decode_vehicle_navi_profile(self.navi_profile_4be)
@@ -731,6 +748,13 @@ class CarState(CarStateBase):
           elif self.vehicleNaviCanControl:
             self._add_vehicle_navi_event(*event, profile["offset"])
 
+    if position_seen:
+      if not range_section_active or not self.vehicleNaviCanControl or 0 < ret.speedLimit <= 30:
+        self._clear_vehicle_navi_speed_zone()
+      elif 30 < ret.speedLimit < 255:
+        self.vehicleNaviSpeedZoneActive = True
+        self.vehicleNaviSpeedZoneSpeed = ret.speedLimit
+
     self.vehicleNaviEvents = [event for event in self.vehicleNaviEvents
                               if event["target"] >= self.totalDistance - VEHICLE_NAVI_PASSED_EVENT_DISTANCE]
     upcoming = [event for event in self.vehicleNaviEvents if event["target"] > self.totalDistance]
@@ -739,7 +763,7 @@ class CarState(CarStateBase):
     if bumps:
       ret.speedBumpDistance = bumps[0]["target"] - self.totalDistance
 
-    if self.vehicleNaviSpeedZoneActive and not speed_limit_cam:
+    if self.vehicleNaviSpeedZoneActive and (not position_seen and not speed_limit_cam):
       self._clear_vehicle_navi_speed_zone()
 
     if self.vehicleNaviSchoolZoneActive:
@@ -922,20 +946,16 @@ class CarState(CarStateBase):
     ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK #cp.vl["TCS"]["ACCEnable"] == 0
 
     avh_state = cp.vl["ESP_STATUS"]["AVH_Sta"]
+    avh_lamp = cp.vl["ESP_STATUS"]["AVH_LAMP"]
+    ret.brakeHoldActive, self.canfdAvhReleaseGraceFrames = update_canfd_auto_hold_interlock_state(
+      avh_state, avh_lamp, self.canfdOemBrakeHoldLatched, self.canfdAvhReleaseGraceFrames,
+    )
+    self.canfdOemBrakeHoldLatched = ret.brakeHoldActive
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       acc_req = cp.vl["TCS"]["ACC_REQ"]
       ret.cruiseState.enabled = acc_req == 1
       ret.cruiseState.standstill = False
-      # AVH_Sta is also asserted by openpilot SCC/soft hold. Only expose an
-      # OEM-owned hold to the cruise interlock. Driver brake distinguishes an
-      # AutoHold engagement from an SCC/soft-hold hydraulic stop, with ACC_REQ
-      # guarding the controller handoff timing.
-      ret.brakeHoldActive, self.canfdAvhActivePrev, self.canfdAvhReleaseGraceFrames = update_canfd_avh_interlock_state(
-        avh_state, acc_req, cp.vl["ESP_STATUS"]["BRAKE_PRESSED"] == 1, self.canfdAvhActivePrev,
-        self.canfdOemBrakeHoldLatched, self.canfdAvhReleaseGraceFrames,
-      )
-      self.canfdOemBrakeHoldLatched = ret.brakeHoldActive
     else:
       cp_cruise_info = cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp
       ret.cruiseState.enabled = cp_cruise_info.vl["SCC_CONTROL"]["ACCMode"] in (1, 2)
@@ -944,9 +964,6 @@ class CarState(CarStateBase):
         ret.pcmCruiseGap = int(np.clip(cp_cruise_info.vl["SCC_CONTROL"]["DISTANCE_SETTING"], 1, 4))
       ret.cruiseState.standstill = cp_cruise_info.vl["SCC_CONTROL"]["InfoDisplay"] >= 4
       ret.cruiseState.speed = cp_cruise_info.vl["SCC_CONTROL"]["VSetDis"] * speed_factor
-      # AVH_Sta is the hydraulic service-brake hold state, not the AutoHold
-      # feature setting. SCC stops can also set it, so exclude active SCC.
-      ret.brakeHoldActive = is_canfd_avh_active(avh_state) and cp_cruise_info.vl["SCC_CONTROL"]["ACCMode"] not in (1, 2)
 
     speed_limit_cam = False
     corner = False
@@ -1091,9 +1108,9 @@ class CarState(CarStateBase):
     return ret
 
   def get_can_parsers_canfd(self, CP):
-    # Stock-navigation route/profile messages are sparse bursts. Register them
-    # as optional from startup so dynamic fingerprint timing cannot miss them.
-    msgs = [("NEW_MSG_4B9", math.nan), ("NEW_MSG_4BE", math.nan)]
+    # Register stock-navigation position/route/profile messages as optional
+    # from startup so dynamic fingerprint timing cannot miss sparse profiles.
+    msgs = [("NEW_MSG_4B4", math.nan), ("NEW_MSG_4B9", math.nan), ("NEW_MSG_4BE", math.nan)]
     if not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
       # TODO: this can be removed once we add dynamic support to vl_all
       msgs += [
