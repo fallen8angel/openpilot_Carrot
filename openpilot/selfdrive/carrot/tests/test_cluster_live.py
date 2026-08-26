@@ -14,6 +14,7 @@ from cluster_live import (
   OpenpilotLiveSource,
   deceleration_source_presentation,
   deceleration_source_display_label,
+  live_route_parser,
   standby_state,
 )
 import cluster_live
@@ -29,8 +30,8 @@ from cluster_models import ClusterAlert
     ("hda_bump", "bump"),
     ("school", "school"),
     ("route", "route"),
-    ("vturn", "turn"),
-    ("model", "turn"),
+    ("vturn", "vturn"),
+    ("model", "model"),
     ("atc", "turn"),
     ("section", "section"),
     ("longsource:c", "longsour"),
@@ -51,7 +52,7 @@ def test_deceleration_source_display_label(source, expected) -> None:
     ("hda_bump", "bump", 3),
     ("school", "school", 3),
     ("route", "route", 4),
-    ("model", "turn", 2),
+    ("model", "model", 2),
   ),
 )
 def test_live_deceleration_override_presents_navigation_origin(desired_source, expected_label, expected_mode) -> None:
@@ -186,6 +187,18 @@ def test_live_cluster_avoids_unused_gps_subscriptions_after_trace_removal() -> N
   assert "livePose" in LIVE_SERVICES_BASE
   assert "gpsLocationExternal" not in LIVE_SERVICES_BASE
   assert "gpsLocation" not in LIVE_SERVICES_BASE
+
+
+def test_live_cluster_uses_authoritative_recorded_cutin_without_recomputation() -> None:
+  parser = live_route_parser()
+
+  def fail_if_called(*_args) -> None:
+    raise AssertionError("live cluster must not recompute CUT-IN from liveTracks")
+
+  parser._update_offline_cutin = fail_if_called
+  parser._update_live_tracks(SimpleNamespace(points=()), 1.0)
+
+  assert not parser.recompute_cutins
 
 
 def test_live_onroad_state_is_unknown_until_device_state_is_alive() -> None:
