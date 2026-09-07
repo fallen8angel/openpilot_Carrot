@@ -2,6 +2,7 @@
 import math
 import numpy as np
 
+from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
@@ -111,6 +112,8 @@ class LongitudinalPlanner:
     self.lead_preview = 0.0
     self.lead_preview_action_time = 0.0
     self.lead_preview_accel = 0.0
+    self.lead_track_ids = [-1, -1]
+    self.lead_track_frames = [0, 0]
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -124,6 +127,19 @@ class LongitudinalPlanner:
     self.v_cruise_kph = 0.0
 
     self.params = Params()
+
+  def update_lead_tracks(self, radar_state):
+    for index, lead in enumerate((radar_state.leadOne, radar_state.leadTwo)):
+      track_id = int(lead.radarTrackId) if lead.status and lead.radar and lead.radarTrackId >= 0 else -1
+      if track_id >= 0 and track_id == self.lead_track_ids[index]:
+        self.lead_track_frames[index] += 1
+      elif track_id >= 0:
+        self.lead_track_ids[index] = track_id
+        self.lead_track_frames[index] = 1
+      else:
+        self.lead_track_ids[index] = -1
+        self.lead_track_frames[index] = 0
+    return tuple(self.lead_track_frames)
 
   @staticmethod
   def parse_model(model_msg):
@@ -238,15 +254,28 @@ class LongitudinalPlanner:
       cutin_predecel_limit,
     )
 
-    self.mpc.set_weights(
-      prev_accel_constraint,
-      personality=sm['selfdriveState'].personality,
-      jerk_factor=carrot.jerk_factor_apply,
-      a_change_cost_starting=carrot.aChangeCostStarting,
+    lead_track_frames = self.update_lead_tracks(sm['radarState'])
+    # Response strength is a driver preference at every following-distance level.
+    lead_accel_response_enabled = (
+      carrot.leadAccelResponse > 0
+      and not reset_state
+      and not sm['carState'].gasPressed
+      and not force_slow_decel
+      and accel_limits_turns[1] > 0.0
+      and not self.output_should_stop
     )
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality)
+    self.mpc.update(
+      carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j,
+      personality=sm['selfdriveState'].personality,
+      prev_accel_constraint=prev_accel_constraint,
+      jerk_factor=carrot.jerk_factor_apply,
+      a_change_cost_starting=carrot.aChangeCostStarting,
+      lead_accel_response_enabled=lead_accel_response_enabled,
+      lead_track_frames=lead_track_frames,
+      measured_a_ego=sm['carState'].aEgo,
+    )
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -285,7 +314,9 @@ class LongitudinalPlanner:
       vEgoStopping=vEgoStopping,
     )
 
-    lead = sm['radarState'].leadOne
+    lead_index = 1 if self.mpc.source == 'lead1' else 0
+    leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo)
+    lead = leads[lead_index]
     preview_request = get_lead_preview_request(
       carrot.myDrivingMode,
       lead_status=(
@@ -300,7 +331,10 @@ class LongitudinalPlanner:
       a_ego=sm['carState'].aEgo,
     )
     if preview_request.active:
-      requested_preview = rate_limit_preview(preview_request.offset_s, self.lead_preview)
+      requested_preview = rate_limit_preview(
+        preview_request.offset_s,
+        self.lead_preview,
+      )
       self.lead_preview = clip_preview_offset(action_t, requested_preview)
       self.lead_preview_accel = preview_request.lead_accel_signal
       self.lead_preview_action_time = action_t + self.lead_preview
@@ -321,7 +355,6 @@ class LongitudinalPlanner:
       output_a_target_preview,
       carrot.myDrivingMode,
       self.lead_preview_accel,
-      a_ego=sm['carState'].aEgo,
     ) if preview_request.active else output_a_target_base
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
@@ -390,6 +423,7 @@ class LongitudinalPlanner:
     longitudinalPlan.leadPreviewActionTime = float(self.lead_preview_action_time)
     longitudinalPlan.leadPreviewAccel = float(self.lead_preview_accel)
     longitudinalPlan.aChangeCost = float(self.mpc.a_change_cost)
+    longitudinalPlan.trafficStopModelLeadOffset = float(carrot.trafficStopModelLeadOffset)
     longitudinalPlan.vTargetNow = float(self.output_v_target_now)
     longitudinalPlan.jTargetNow = float(self.output_j_target_now)
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
