@@ -3314,6 +3314,59 @@ def test_stationary_front_rejects_opposite_side_uncertain_vision_match() -> None
   assert matcher.stationary_identity is None
 
 
+@pytest.mark.parametrize("distance,vision_speed,corner,expected", (
+  (20.0, 8.5, False, False),
+  (20.0, 0.0, False, True),
+  (20.0, 8.5, True, True),
+  (90.0, 8.5, False, True),
+))
+def test_near_stationary_front_cannot_borrow_precise_moving_vision(
+  distance, vision_speed, corner, expected,
+) -> None:
+  matcher = VisionRadarMatcher()
+  matches = []
+  for index in range(20):
+    time_s = index * 0.05
+    d_rel = distance - 8.0 * time_s
+    points = [Point(33, d_rel, 0.0, v_rel=-8.0, source="frontRadar")]
+    if corner:
+      points.append(Point(1033, d_rel + 0.2, 0.1, v_rel=-8.0, source="corner235"))
+    snapshots = snapshot_radar_points(points, v_ego=8.0)
+    model = model_with_lead(d_rel + 0.5, 0.5, vision_speed, probability=0.99)
+    model.leadsV3[0].vStd = (0.8,)
+    matches.append(matcher.match(
+      model, snapshots[:1], STRAIGHT_PATH, time_s=time_s,
+      stationary_points=snapshots, prefer_primary_stationary=True,
+      yaw_rate_rad_s=0.04,
+    ))
+  assert (matches[-1] is not None) == expected
+  if not expected:
+    assert all(match is None for match in matches)
+
+
+def test_near_stationary_speed_conflict_revokes_pending_and_held_identity() -> None:
+  for seed_frames in (3, 10):
+    matcher = VisionRadarMatcher()
+    for index in range(seed_frames + 8):
+      time_s = index * 0.05
+      points = snapshot_radar_points(
+        (Point(33, 25.0 - 8.0 * time_s, 0.0, v_rel=-8.0),), v_ego=8.0,
+      )
+      conflict = index >= seed_frames
+      model = model_with_lead(points[0].d_rel, 0.0, 8.5 if conflict else 0.0, probability=0.99)
+      model.leadsV3[0].vStd = (0.8,)
+      match = matcher.match(
+        model, points, STRAIGHT_PATH, time_s=time_s,
+        stationary_points=points, prefer_primary_stationary=True,
+      )
+      if conflict:
+        assert match is None
+        assert matcher.stationary_identity is None
+        assert matcher._stationary_pending_identity is None
+      elif index == seed_frames - 1 and seed_frames == 10:
+        assert match is not None
+
+
 def test_stationary_front_rejects_offset_moving_vision_median_reflection() -> None:
   matcher = VisionRadarMatcher()
   for index in range(8):
@@ -3643,6 +3696,64 @@ def test_stationary_front_ignores_transient_closer_vision_match() -> None:
   assert retained is not None
   assert retained.point.track_id == 59
   assert matcher.stationary_identity == ("frontRadar", 59)
+
+
+def closer_stationary_sequence(samples):
+  """A central nearer body competes with the previously matched stopped car."""
+  matcher = VisionRadarMatcher()
+  for index in range(7):
+    points = snapshot_radar_points((Point(39, 6.0, 0.6),), v_ego=0.0)
+    matcher.match(model_with_lead(6.0, 0.6, 0.0, probability=1.0), points,
+                  STRAIGHT_PATH, time_s=index * 0.05, stationary_points=points,
+                  prefer_primary_stationary=True)
+  selected = []
+  for elapsed, vision_distance, change in samples:
+    held = Point(39, 6.0, 0.6)
+    challenger = Point(60, 3.5, 0.0)
+    if change == "new_id":
+      challenger = replace(challenger, track_id=61)
+    elif change == "lateral":
+      challenger = replace(challenger, y_rel=-1.3)
+    elif change == "moving":
+      challenger = replace(challenger, v_rel=3.0)
+    elif change == "unmeasured":
+      challenger = replace(challenger, measured=False)
+    elif change == "farther":
+      challenger = replace(challenger, d_rel=7.0)
+    points = snapshot_radar_points((held, challenger), v_ego=0.0)
+    model = model_with_lead(vision_distance, 0.0, 0.0,
+                            probability=0.85 if change == "weak_vision" else 1.0)
+    model.leadsV3[0].xStd = (0.5,)
+    model.leadsV3[0].yStd = (0.1,)
+    result = matcher.match(model, points, STRAIGHT_PATH, time_s=0.35 + elapsed,
+                           stationary_points=points, prefer_primary_stationary=True)
+    selected.append(result.point.track_id if result else None)
+  return selected
+
+
+def test_stationary_closer_handoff_finishes_after_bounded_cost_jitter():
+  # Six good samples fall just short of 250 ms. The next sample still favors
+  # the same nearer body, but its cost gain falls from 0.15 to 0.067.
+  samples = [(t, 5.2, "") for t in (0.0, 0.055, 0.100, 0.154, 0.206, 0.249894)]
+  samples += [(0.305, 5.45, ""), (0.355, 5.45, "")]
+  assert closer_stationary_sequence(samples) == [39] * 6 + [60] * 2
+
+
+@pytest.mark.parametrize("samples", (
+  [(i * 0.05, 5.45, "") for i in range(10)],
+  [(0.0, 5.2, "")] + [(i * 0.05, 5.45, "") for i in range(1, 10)],
+  [(i * 0.05, 5.2 if i % 2 == 0 else 5.45, "") for i in range(10)],
+))
+def test_stationary_closer_handoff_cannot_start_with_weak_cost_support(samples):
+  assert closer_stationary_sequence(samples) == [39] * len(samples)
+
+
+@pytest.mark.parametrize("change", ("new_id", "lateral", "moving", "unmeasured", "farther", "weak_vision", "gap", "cost_reversal"))
+def test_stationary_closer_handoff_jitter_hold_keeps_hard_vetoes(change):
+  samples = [(t, 5.2, "") for t in (0.0, 0.055, 0.100, 0.154, 0.206, 0.249894)]
+  samples.append((0.5 if change == "gap" else 0.305,
+                  5.8 if change == "cost_reversal" else 5.45, change))
+  assert closer_stationary_sequence(samples)[-1] != 60
 
 
 def test_stationary_front_radar_rejects_low_confidence_vision_seed() -> None:

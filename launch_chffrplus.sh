@@ -4,6 +4,22 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
 source "$DIR/launch_env.sh"
 
+function disable_automatic_git_maintenance {
+  # Git fetch/pull can otherwise leave a detached repack running into a drive.
+  # Inherit this policy in recovery, web, manager and their Git/submodule workers
+  # without changing .git/config (which would invalidate the staging overlay).
+  local config_count="${GIT_CONFIG_COUNT:-0}"
+  local option
+  for option in gc.auto=0 gc.autoDetach=false maintenance.auto=false; do
+    export "GIT_CONFIG_KEY_${config_count}=${option%%=*}"
+    export "GIT_CONFIG_VALUE_${config_count}=${option#*=}"
+    config_count=$((config_count + 1))
+  done
+  export GIT_CONFIG_COUNT="$config_count"
+}
+
+disable_automatic_git_maintenance
+
 function cleanup_stale_git_lfs_hooks {
   # Some deployed checkouts still contain hooks installed by git-lfs even
   # though the executable is no longer part of the device image. Those hooks
@@ -348,6 +364,12 @@ function invalidate_native_build_if_needed {
   if [ "$missing" = "1" ]; then
     FORCE_REBUILD=1
   fi
+
+  # A prebuilt checkout can retain params_pyx.so from before new keys were
+  # added. Check the loaded registry, not just the presence of native binaries.
+  if ! python3 "$DIR/openpilot/system/manager/params_check.py"; then
+    FORCE_REBUILD=1
+  fi
 }
 
 function start_manager {
@@ -489,6 +511,11 @@ function launch {
         echo -n "$BIG_MODEL_SHA" > "$DIR/openpilot/selfdrive/modeld/models/.big_model_build_stamp"
       fi
     fi
+  fi
+  # Never start driving services if a rebuild left the Params registry stale.
+  if ! python3 "$DIR/openpilot/system/manager/params_check.py"; then
+    echo "Native Params still do not match this checkout; not starting manager."
+    return 1
   fi
   start_big_model_update
   start_manager

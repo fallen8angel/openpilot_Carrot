@@ -237,13 +237,14 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"AutoNaviSpeedCtrlEnd", {PERSISTENT, INT, "7"}},
     {"AutoNaviSpeedCtrlMode", {PERSISTENT, INT, "2"}},
-    {"VehicleNaviCanControl", {PERSISTENT, BOOL, "0"}},
+    {"VehicleNaviCanControl", {PERSISTENT, INT, "0"}},
     {"VehicleNaviSchoolZoneControl", {PERSISTENT, BOOL, "0"}},
     {"VehicleSpeedCameraControlMode", {PERSISTENT, INT, "1"}},
     {"VehicleSpeedCameraDistanceTime", {PERSISTENT, INT, "60"}},
     {"AutoRoadSpeedLimitOffset", {PERSISTENT, INT, "-1"}},
     {"AutoNaviSpeedBumpTime", {PERSISTENT, INT, "1"}},
     {"AutoNaviSpeedBumpSpeed", {PERSISTENT, INT, "35"}},
+    {"AutoNaviSpeedBumpEndDistance", {PERSISTENT, INT, "200"}},
     {"AutoNaviSpeedDecelRate", {PERSISTENT, INT, "120"}},
     {"AutoNaviSpeedSafetyFactor", {PERSISTENT, INT, "105"}},
     {"AutoNaviCountDownMode", {PERSISTENT, INT, "2"}},
@@ -393,4 +394,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     {"HardwareC3xLite", {PERSISTENT, INT, "0"}},
     {"ShareData", {PERSISTENT, INT, "0"}},
+    {"OnnxLaneThreshold", {PERSISTENT, INT, "25"}},
+    {"OnnxLaneIntervalMs", {PERSISTENT, INT, "400"}},
+    {"OnnxBsdThreshold", {PERSISTENT, INT, "45"}},
+    {"OnnxBsdSmoothingMs", {PERSISTENT, INT, "200"}},
+    {"OnnxBsdIntervalMs", {PERSISTENT, INT, "250"}},
 };
