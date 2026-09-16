@@ -30,7 +30,6 @@
 | 도로 제한속도 + 오프셋 | `AutoRoadSpeedLimitOffset` |
 | 비전 커브 | `AutoCurveSpeedFactor`, `TurnSpeedControlMode` |
 | 경로 턴 | `MapTurnSpeedFactor`, `TurnSpeedControlMode` |
-| 모델 미래속도 | `ModelTurnSpeedFactor` |
 | 별도 자동 턴 제어 | `AutoTurnControl` 계열 |
 
 따라서 한 설정을 올렸는데 속도가 변하지 않으면 다른 후보가 이미 더 낮은지 확인해야 합니다. 화면에 표시되는 감속 소스, 이벤트 종류, 목표 제한속도와 남은 거리를 함께 보세요.
@@ -46,7 +45,6 @@ Carrot Web 기본값 복원에 쓰이는 `carrot_settings.json`과 Params 최초
 |---|---:|---:|
 | `AutoCurveSpeedFactor` | 100 | 120 |
 | `AutoNaviSpeedCtrlEnd` | 6 | 7 |
-| `AutoNaviSpeedDecelRate` | 200 | 120 |
 | `MapTurnSpeedFactor` | 100 | 90 |
 | `AutoRoadSpeedAdjust` | 0 | 50 |
 
@@ -55,7 +53,7 @@ Carrot Web 기본값 복원에 쓰이는 `carrot_settings.json`과 Params 최초
 <a id="speed-camera"></a>
 ## 1. 과속카메라
 
-관련 설정은 `AutoNaviSpeedCtrlMode`, `AutoNaviSpeedCtrlEnd`, `AutoNaviSpeedDecelRate`, `AutoNaviSpeedSafetyFactor`, `AutoNaviCountDownMode`, `VehicleNaviCanControl`, `VehicleNaviSchoolZoneControl`, `VehicleSpeedCameraControlMode`, `VehicleSpeedCameraDistanceTime`입니다.
+관련 설정은 `AutoNaviSpeedCtrlMode`, `AutoNaviSpeedCtrlEnd`, `AutoNaviRearCameraHoldDistance`, `AutoNaviSpeedDecelRate`, `AutoNaviSpeedSafetyFactor`, `AutoNaviCountDownMode`, `VehicleNaviCanControl`, `VehicleNaviSchoolZoneControl`, `VehicleSpeedCameraControlMode`, `VehicleSpeedCameraDistanceTime`입니다.
 
 ### `AutoNaviSpeedCtrlMode`
 
@@ -70,7 +68,11 @@ Carrot Web 기본값 복원에 쓰이는 `carrot_settings.json`과 Params 최초
 
 ### 차량 순정 내비 CAN 제어
 
-`VehicleNaviCanControl`은 지원되는 Hyundai/Kia CAN-FD 차량에서 순정 내비가 제공하는 카메라·방지턱의 실제 거리를 감속에 사용할 범위를 정합니다. 기존 켜짐 값 `1`은 그대로 항상 적용 모드로 동작합니다.
+외부 내비가 연결되어 있으면 감속과 카운트다운은 외부 내비만 사용합니다. 외부 내비에 현재 안내나 단속 항목이 없어도 순정 내비의 카메라·방지턱·구간단속·30km/h 구역 제한과 순정 내비 속도 표시는 사용하지 않습니다. 연결 종료 또는 수신 시간 초과가 확인되면 순정 내비를 각 설정에 따라 다시 사용합니다.
+
+`VehicleNaviCanControl`은 지원되는 Hyundai/Kia CAN-FD 차량에서 순정 내비가 제공하는 카메라·방지턱의 실제 거리를 감속에 사용할 범위를 정합니다. 아래 모드는 외부 내비가 연결되지 않았을 때만 적용하며, `1`의 항상 적용은 순정 내비 경로 안내 여부와 관계없이 적용한다는 뜻입니다.
+
+현재 카메라 경고에는 제한속도가 같고 가까운 거리 후보만 연결합니다. 같은 속도의 먼 카메라만 있으면 현재 경고의 가상거리를 사용하며, 먼 카메라는 이후 접근을 위한 후보로 남겨 둡니다.
 
 | 값 | vNAVI 미래 이벤트 적용 범위 |
 |---:|---|
@@ -104,6 +106,16 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 
 차량이 실제 카메라 거리를 제공하지 않고 단속속도만 보낼 때 가상 감속거리를 만듭니다. 화면의 `6.0초`는 50km/h 카메라에서 약 300m, `6.2초`는 약 310m의 가상거리를 뜻하며 변경값은 주행 중 약 1초 안에 반영됩니다.
 
+지원 CAN-FD 차량에서 현재 경고와 일치하는 가까운 카메라 거리가 없을 때도 사용합니다. 새 경고나 제한속도 변경 시 가상거리를 새로 시작하고 주행거리만큼 줄입니다. 거리가 소진되어도 경고가 유지되는 동안에는 감속 제한을 유지하며, 가상거리를 처음 길이로 반복해서 늘리지 않습니다.
+
+### `AutoNaviRearCameraHoldDistance`
+
+외부 내비가 후면 과속 또는 후면 신호·과속 카메라(TMAP 종류 `75/76`)를 안내하면 카메라 지점을 지난 뒤에도 목표속도 제한을 유지합니다. 기본값은 **100m**, 범위는 **0~300m**, 조정 단위는 **10m**이며 `0`은 추가 유지를 끕니다. 값을 높이면 더 멀리까지 유지하고 낮추면 더 빨리 해제합니다.
+
+마지막 50m 접근에서 카메라 위치를 기억하고 이후 주행거리로 추적합니다. 안내가 사라지거나 다음 카메라·방지턱으로 바뀌어도 유지하며, 다른 감속 조건이 더 낮은 속도를 요구하면 그 조건을 적용합니다. 정차 중에는 유지 거리가 줄지 않습니다. 화면에 후면단속 속도 유지와 남은 거리를 표시하며 카운트다운은 원래 카메라 지점에서 끝납니다.
+
+외부 연결 종료, 경로 이탈, 새 내비 세션, 차량 주행거리 초기화 또는 카메라 감속 비활성화 시 초기화합니다. 순정 CAN은 후면 종류를 구분하지 못하므로 이 추가 거리를 적용하지 않고 순정 경고가 유지되는 동안 감속 제한을 유지합니다. 설정 거리는 실제 장비의 측정 종료를 보장하는 값이 아닙니다.
+
 ### `AutoNaviSpeedSafetyFactor`
 
 카메라 목표속도는 다음처럼 계산합니다.
@@ -133,12 +145,14 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 
 ### `AutoNaviSpeedDecelRate`
 
-저장값에 `0.01m/s²`를 곱해 감속 가능 속도 곡선을 계산합니다.
+카탈로그 기본값과 Params 최초 생성값은 모두 `120`이며, 계산 감속률은 `1.20m/s²`입니다. 기존에 저장된 설정은 업데이트만으로 변경되지 않습니다.
+
+저장값에 `0.01m/s²`를 곱해 카메라·방지턱 접근 시 감속 가능 속도 곡선을 계산합니다.
 
 | 저장값 | 계산에 쓰는 감속률 | 체감 방향 |
 |---:|---:|---|
 | 80 | 0.80m/s² | 더 멀리서 완만하게 시작 |
-| 120 | 1.20m/s² | 중간 |
+| 120 | 1.20m/s² | 기본값 |
 | 200 | 2.00m/s² | 더 가까이서 강하게 시작 가능 |
 
 핵심은 **값이 낮을수록 더 일찍 감속**한다는 점입니다. 코드는 남은 거리에서 목표속도까지 감속할 수 있는 현재 속도 상한을 다음 관계로 계산합니다.
@@ -155,7 +169,7 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 | 1 | 턴 지점 + 속도 이벤트, 방지턱 제외 |
 | 2 | 턴 지점 + 속도 이벤트 + 방지턱 |
 
-카운트다운은 남은 거리와 현재 속도로 예상 초를 표시하는 기능입니다. 감속 계산 자체의 시작 시점이나 강도를 바꾸지 않습니다.
+카운트다운은 외부 내비 연결 중에는 외부 내비 거리만, 미연결 시에는 순정 내비 거리를 사용합니다. 연결 상태가 바뀌면 이전 카운트다운을 초기화합니다. 남은 거리와 현재 속도로 예상 초를 표시하며, 감속 계산 자체의 시작 시점이나 강도를 바꾸지 않습니다.
 
 ### 카메라 감속 조정 순서
 
@@ -284,18 +298,21 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 <a id="curve-turn"></a>
 ## 4. 커브·턴
 
-관련 설정은 `AutoCurveSpeedFactor`, `AutoCurveSpeedLowerLimit`, `TurnSpeedControlMode`, `MapTurnSpeedFactor`, `ModelTurnSpeedFactor`, `ApplyModelSpeed`입니다.
+관련 설정은 `AutoCurveSpeedFactor`, `AutoCurveSpeedLowerLimit`, `TurnSpeedControlMode`, `MapTurnSpeedFactor`, `ApplyModelSpeed`입니다.
 
 커브 관련 속도는 하나가 아닙니다.
 
 - **비전 커브 속도**: 모델이 본 진행 방향의 회전율과 속도로 계산
 - **경로 턴 속도**: 경로·TBT에서 받은 턴 속도에 비율 적용
-- **모델 미래속도**: 모델이 몇 초 뒤로 예측한 속도 사용
 - **모델 주행속도 적용**: 모델의 전체 desired velocity를 크루즈 설정속도에 별도로 반영
 
 ### `AutoCurveSpeedFactor`
 
-비전 모델의 회전율에 비율을 곱한 뒤 목표 횡가속도 1.9m/s²를 기준으로 커브 속도를 계산합니다. 값이 클수록 같은 커브를 더 굽은 것으로 보므로 목표속도가 낮아집니다.
+비전 모델의 회전율을 같은 시점의 예측속도로 나누어 곡률을 구합니다. 허용 횡가속도는 기준 1.9m/s²를 설정비율로 나누어 정하므로, 값이 클수록 같은 커브의 목표속도가 낮아집니다. 모델의 미래속도를 주행 목표속도로 직접 사용하지 않습니다.
+
+커브 목표속도와 그 커브까지 남은 거리를 함께 계산합니다. 멀리 있는 커브는 현재 위치에서 더 높은 속도를 허용하고, 가까워질수록 커브 목표속도에 도달하도록 상한을 낮춥니다. 제어 응답과 감속이 서서히 커지는 시간을 고려하며, 제한 해제는 잠깐 유지한 뒤 점진적으로 이뤄집니다.
+
+저속·유효하지 않은 모델 예측과 단일 회전율 이상치를 제외합니다. 예측이 늦거나 부정확하면 커브 전 감속도 늦을 수 있습니다.
 
 속도 변화는 비율에 단순 반비례하지 않고 대략 제곱근 관계입니다. 예를 들어 100%에서 120%로 올리면 계산 속도는 약 `1 / √1.2`, 즉 기존의 약 91% 수준이 됩니다.
 
@@ -306,7 +323,7 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 
 ### `AutoCurveSpeedLowerLimit`
 
-비전 커브, 경로 턴과 모델 미래속도 후보에 적용되는 최저속도입니다.
+비전 커브와 경로 턴 후보에 적용되는 최저속도입니다. 비전 커브에서는 커브 통과 목표에 먼저 적용하고, 남은 거리로 현재 위치의 속도 상한을 계산합니다.
 
 - 30이면 각 커브 후보를 최소 30km/h로 제한
 - 높이면 급커브에서도 목표가 그 값 아래로 내려가지 않음
@@ -326,7 +343,7 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 모드 2의 경로 속도는 현재 턴 거리 값이 약 -500~500m 범위일 때만 후보에 들어갑니다. 모드 3은 경로 속도를 항상 후보에 넣으므로 경로 정보가 부정확한 환경에서는 예상하지 못한 감속이 생길 수 있습니다.
 
 > [!IMPORTANT]
-> `TurnSpeedControlMode=0`이 모든 모델 기반 속도 기능을 끄는 것은 아닙니다. `ModelTurnSpeedFactor`와 `ApplyModelSpeed`는 별도 분기이므로 각각 0인지 확인해야 합니다.
+> `TurnSpeedControlMode=0`이 모든 모델 기반 속도 기능을 끄는 것은 아닙니다. `ApplyModelSpeed`는 별도 설정속도 기능입니다.
 
 ### `MapTurnSpeedFactor`
 
@@ -337,19 +354,6 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 - 120%: 받은 속도보다 높게 반영
 
 그 결과에 `AutoCurveSpeedLowerLimit`이 최저값으로 적용됩니다. 설정 설명의 APN·외부 연결 문구와 별개로, 현재 지원되는 입력에서 유효한 경로 속도가 들어와야 동작합니다. 당근맨과 CarrotLink는 현재 지원하지 않습니다.
-
-### `ModelTurnSpeedFactor`
-
-저장값에 `0.1초`를 곱해 모델 속도 예측에서 볼 미래 시점을 정합니다.
-
-| 저장값 | 보는 시점 |
-|---:|---:|
-| 0 | 사용 안 함, 모델 턴 속도 200km/h로 비활성화 |
-| 10 | 약 1.0초 뒤 |
-| 30 | 약 3.0초 뒤 |
-| 50 | 약 5.0초 뒤 |
-
-선택한 시점의 모델 속도에 1.2를 곱하고 평활화한 값이 후보가 됩니다. 값이 크다고 항상 더 느려지는 설정은 아니며, 더 먼 미래에 모델이 예측한 속도가 낮은지 높은지에 따라 달라집니다.
 
 ### `ApplyModelSpeed`
 
@@ -371,11 +375,11 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 
 ### 커브 조정 추천 순서
 
-1. `TurnSpeedControlMode=1`, `ModelTurnSpeedFactor=0`, `ApplyModelSpeed=0`으로 비전 커브만 분리합니다.
+1. `TurnSpeedControlMode=1`, `ApplyModelSpeed=0`으로 비전 커브만 분리합니다.
 2. `AutoCurveSpeedFactor`를 5씩 바꾸며 같은 커브에서 비교합니다.
 3. 필요한 최저값만 `AutoCurveSpeedLowerLimit`로 정합니다.
 4. 경로 정보가 검증된 경우에만 모드 2와 `MapTurnSpeedFactor`를 추가합니다.
-5. `ModelTurnSpeedFactor`는 마지막에 추가하고, `ApplyModelSpeed`는 별도 기능으로 시험합니다.
+5. `ApplyModelSpeed`는 크루즈 설정속도를 바꾸는 별도 기능으로 확인합니다.
 
 [5개 세부 구역으로 돌아가기](#5개-세부-구역)
 
@@ -437,7 +441,7 @@ PV5 구간단속은 평균속도나 남은거리를 계산하지 않습니다. �
 | 제한속도 변경에 반응하지 않음 | 유효한 도로 속도, `AutoSpeedUptoRoadSpeedLimit`, `AutoRoadSpeedAdjust` 의존성 |
 | 방지턱 감속이 없음 | 모드 2 이상, 이벤트 종류, 도로 범주 |
 | 직선에서 커브 감속 | 최종 소스가 비전·경로·모델 중 무엇인지 확인 |
-| 턴 모드 0인데 감속 | `ModelTurnSpeedFactor`, `ApplyModelSpeed`, 별도 ATC 확인 |
+| 턴 모드 0인데 감속 | `ApplyModelSpeed`, 별도 ATC 확인 |
 | 신호에서 불필요한 정지·출발 | `TrafficLightDetectMode`, 주행 모드, 모델 판단 확인 |
 
 CAN 오류로 자동 전송되는 진단 로그는 현재 온로드에서 새로 수신 중인 차량 또는 레이더 상태가 실제 오류를 보고할 때만 생성됩니다. 이전 주행 종료 과정의 CAN timeout은 사용하지 않으며, 오류 뒤의 상황을 포함하도록 감지 5초 후 캡처합니다. 따라서 속도·감속 이상을 분석할 때 자동 진단 로그가 없더라도 필요한 주행 구간은 Carrot Web에서 별도로 전송해야 합니다.
