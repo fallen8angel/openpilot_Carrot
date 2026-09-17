@@ -326,7 +326,6 @@
               "zh": "停车与再起步",
               "params": [
                 "StopDistanceCarrot",
-                "StoppingAccel",
                 "VEgoStopping",
                 "AChangeCostStarting"
               ]
@@ -404,6 +403,7 @@
           "params": [
             "CanfdHDA2",
             "CanfdDebug",
+            "CanfdStopRetry",
             "HDPuse"
           ]
         },
@@ -2640,6 +2640,24 @@
     },
     {
       "group": "시작",
+      "name": "CanfdStopRetry",
+      "title": "CANFD 정지 재시도 (시험)",
+      "descr": "기본 OFF. 현대·기아 CANFD 오픈파일럿 종방향 제어용 시험 기능입니다. OFF는 기존 정지 동작, ON은 순정형 정지 요청 후 움직임이 지속되면 감속·재요청합니다. 차종별 완전 정지는 검증되지 않았습니다. 변경 후 기기를 재부팅하세요.",
+      "egroup": "START",
+      "etitle": "CANFD Stop Retry (Experimental)",
+      "edescr": "Default OFF. Experimental stopping for Hyundai/Kia CANFD with openpilot longitudinal control. OFF retains existing stopping; ON sends stock-like stop requests and retries with deceleration if motion persists. Complete stopping is not validated across vehicles. Reboot the device after changing.",
+      "cgroup": "启动设置",
+      "ctitle": "CANFD 停车重试（试验）",
+      "cdescr": "默认关闭。用于现代/起亚 CANFD 的 openpilot 纵向控制试验功能。关闭时保留原有停车控制；开启后发送类似原厂的停车请求，若持续移动则减速并重试。尚未验证所有车型均能完全停车。更改后请重启设备。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1,
+      "control": "toggle",
+      "risk": "high"
+    },
+    {
+      "group": "시작",
       "name": "CanfdDebug",
       "title": "CANFD Debug(0)",
       "descr": "",
@@ -3216,22 +3234,6 @@
       "default": 30,
       "unit": 10,
       "display_unit": "speedKph"
-    },
-    {
-      "group": "주행튜닝",
-      "name": "StoppingAccel",
-      "title": "정지시작가속도x0.01(-50)",
-      "descr": "정지시작가속도 조정. 현대·기아·제네시스는 부팅 후 차량 제어 초기화 시 0을 -50으로 자동 변경합니다. 다른 차종의 0은 기존방식입니다.",
-      "egroup": "LONG",
-      "etitle": "StoppingStartAccelx0.01(-50)",
-      "edescr": "Adjust stopping acceleration. Hyundai, Kia, and Genesis automatically change 0 to -50 when vehicle control initializes after boot. For other brands, 0 uses the traditional method.",
-      "cgroup": "纵向控制",
-      "ctitle": "停止起步加速度 x0.01(-50)",
-      "cdescr": "调整停止加速度。现代、起亚和捷尼赛思在启动后初始化车辆控制时自动将0改为-50。其他品牌设为0时使用传统方式。",
-      "min": -100,
-      "max": 0,
-      "default": -50,
-      "unit": 10
     },
     {
       "group": "가속설정",
