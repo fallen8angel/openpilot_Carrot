@@ -1,5 +1,29 @@
 # Repository memory
 
+- On 2026-09-21, K9 C4 logs reproduced locationd timing-check invalidity from
+  repeated IMU timestamps over 100 ms old. Historical captures first showed
+  these failures after the September 19 update, despite unchanged HUD 10 FPS,
+  cores 1..4 and FIFO 10. The user authorized normal SCHED_OTHER scheduling for
+  cluster autorun/render workers so sensord FIFO 1 and other realtime work
+  take precedence. Keep legacy ClusterHudPriority/environment overrides from
+  restoring FIFO; retain FPS and core selection. This is a contention mitigation,
+  not a proved fix for the OS/runtime regression. Do not weaken pose validity
+  thresholds or claim vehicle validation from desktop tests. Official 521db4c
+  changes initial gyro-bias covariance, not the observed sensor timestamp delays.
+
+- On 2026-09-21 the user authorized radar optimization and preprocessing
+  isolation to reduce card/camerad contention on core6, with mandatory radar
+  regression validation. RadarInterface/liveTracks now belong to radarcan on
+  core4 FIFO51 (below controlsd/selfdrived FIFO53); card remains core6 FIFO53,
+  model-driven radard/planner core5. Preserve carState.radarInput batch metadata
+  and non-conflated CAN/ego joining: using an arbitrary latest ego sample breaks
+  delay/filter cadence. Keep planner's existing fast liveTracks path during this
+  first isolation step. See docs/radar_process_isolation.md for equivalence,
+  corpus failures and limits. C3/C4 device timing/camera improvements are NOT
+  yet validated. Never present same-core contention as a proved IFE root cause
+  or desktop speedup as a vehicle result. Radar changes also require NAS replay
+  deployment and actual result verification below.
+
 - On 2026-09-20, EV9 `3eef70e8fb92485c` (tizi/C3 family) reproduced Cinque v3
   dropped-frame odometry invalidity even with `xiaoge_data` stopped. Raw-image
   upload averaged 24.75 ms and model execution 50.69 ms; C4 `07b62e389ed26c81`
