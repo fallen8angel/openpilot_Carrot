@@ -154,3 +154,155 @@ the comma's existing signed runtime pin have not been replaced.
 Docs-Not-Needed: Engineering candidate only; no new user setting or released
 installation procedure. Public beginner instructions change only with a tested
 installer artifact.
+
+## Physical candidate failure and USB diagnostics (2026-09-28)
+
+The owner card passed all 40 GiB of write/readback comparison before private
+public-key provisioning. The subsequent physical trial did **not** establish a
+working Jetson: comma reported USB not attached and the host model inactive,
+while native model/pose messages remained valid at rest. SSH was unavailable.
+The user has only a TURZX USB panel, not a DisplayPort boot console.
+
+Read-only inspection after returning the card to the PC found completed
+provisioning and checksum-valid identity generations 1 and 2. Generation 2
+contains two Wi-Fi profiles; the provisioning worker saves this generation only
+after NetworkManager reports a selected imported connection active. This shows
+the first run reached provisioning/network setup; it does not establish which
+later stage failed or why subsequent USB/SSH access disappeared. No raw profile
+or identity content belongs in this document or a public artifact.
+
+There is also a separate confirmed protection gap: NVIDIA's embedded initrd
+mounts the non-overlay root writable despite the kernel `ro` token, before
+systemd later remounts it. The card's formerly empty base machine-id was written.
+The current image must **not** be advertised as protected from the first mount.
+Fixing and physically validating the initrd path remains a release requirement;
+this finding alone is not proof of the observed connection failure's cause.
+
+The diagnostic candidate adds a CPU/Pillow JPEG screen independent of comma
+snapshots, Xorg and inference. It shows storage/boot stage, Wi-Fi, IP, SSH and
+service status, temperature and boot elapsed time. A live service is not labelled
+model-ready. A shared process lock hands the panel to the regular HUD; a killed
+HUD releases it, and stale requests cannot survive PID reuse. Diagnostics never
+reset the USB device and run at nice19/one frame per second. The diagnostic code
+is pinned outside updateable releases in new images, but still needs the supplied
+Python environment, working kernel/USB and a supported panel. It cannot display
+firmware, power or pre-userspace failures, nor take over a live wedged HUD's lock.
+
+Storage boot also records its stage/error class in RAM and attempts one bounded
+`BOOT-STATUS.json` write on CARROTSETUP at completion/failure. It excludes profiles,
+keys and journals. Failure before this helper starts can leave an older result;
+the boot ID distinguishes recorded runs. The first failing card predates this
+recording, so its original transient logs are unavailable.
+
+Windows tests and CPU rendering are not USB-panel or new-image boot validation.
+An owner-card diagnostic patch is being prepared separately from public artifacts;
+the NAS public image and signed automatic update channel remain unchanged.
+
+### Recovered connection and full-boot findings
+
+After the owner reconnected USB, the same candidate booted with fresh USB ready
+state, active Cinque v2 inference, Wi-Fi and SSH. This does not prove the earlier
+failure was a defective cable. Live root and root block device were read-only;
+etc/var/home/root used RAM overlays, logs used tmpfs, and the runtime used DATA.
+This verifies the post-helper state, not protection during the initial initrd mount.
+
+The full boot exposed NVIDIA `nv.sh` attempting to recreate already-correct
+Weston/Wayland symlinks on the immutable root. Its failure blocked nvpmodel,
+performance setup, Xorg and the normal USB HUD. The candidate image installer
+now makes those link operations idempotent: matching links need no write;
+missing/incorrect links retain their write failure. NVIDIA runtime initialization
+is retained. A RAM-only trial on the owner's Jetson made nv.service succeed.
+Because inference had already initialized the GPU, retrying nvpmodel then asked
+for a reboot and failed without rebooting; normal HUD recovery is not yet proved.
+Do not bypass that dependency or claim the power-mode label verifies every clock
+and gating setting. The owner card still needs the persistent image fix.
+
+The CPU diagnostic worker also encountered Python3.10 TypeError from a thermal
+sysfs read. It now skips that unavailable sensor, as host_health already does,
+and still renders other sensors and boot errors. It reports NVIDIA initialization
+failures too. The portrait JPEG correction and thermal fix were installed in RAM
+on the running device; they have not been persisted to its pinned owner payload.
+The old owner payload, public image and stable runtime channel remain unchanged.
+
+### Second image candidate: first-mount protection
+
+The owner subsequently confirmed that the USB diagnostic screen is visible.
+The new offline installer patches only the SHA256-reviewed L4T36.4.7 initrd init
+program, preserving other archive members. Its SD path disables the alternative
+EFI overlay selection, requires mmcblk0p1, mounts APP `ro,noload`, skips the DNS
+copy into immutable etc, and sets the root block device read-only before PID1.
+Unknown init programs/layouts are rejected. The kernel and firmware are unchanged.
+This is a candidate implementation; physical boot and power-cycle validation
+are still required before claiming the original early-write gap is closed.
+
+Normal systemd boot retains RAM machine identity instead of committing it to APP.
+The existing storage helper gives NVIDIA's temporary /mnt directory a small
+tmpfs and binds only the regenerated PVA authentication allowlist output to RAM.
+It does not disable PVA authentication or make the firmware tree writable.
+The NVIDIA USB-device-mode directory also has a RAM overlay: its helper rewrites
+a 16 MiB identification filesystem and caches MAC addresses beside its scripts.
+The offline installer removes that MAC cache so each board derives its own
+identity. The identification image and scripts in APP remain unchanged at boot.
+NVIDIA initialization services explicitly wait for these storage preparations.
+Real-loop tests write the PVA output and /mnt while checking the entire base
+filesystem remains byte-identical across two simulated helper boots. This is
+not a substitute for a physical PID1/USB/model startup test.
+
+The completed second private candidate uses source `b4df5489b2` and has raw
+SHA256 `b11f5601d3a713ad0de23315ee90daddf5452f8e548f2c87c8eeec28d321e55f`.
+Its full APP partition (24,136,122,368 bytes) has baseline SHA256
+`80fe3f9b746734696b1502820e9dd015f79d8465387886e34a7ffd88bd477ac0` for physical
+before/after boot comparison. The Linux-generated initrd decompresses byte-for-byte
+to the independently inspected Windows candidate; gzip's OS header byte accounts
+for their differing compressed hashes. No initrd member except init changed.
+
+Root/DATA filesystem checks, FAT, GPT, runtime imports, both unchanged model
+hashes, and the offline systemd unit graph passed. Separate mount/UTS/PID chroots
+passed normal DATA and unavailable-DATA recovery, including APP EROFS and RAM
+writes. Neither runs the physical firmware/PID1/GPU startup. During image building,
+a parked 60-second observation retained an active/ready host with no invalid
+model/pose messages; it validates that observed build interval, not the new image.
+The owner Jetson was subsequently shut down in P for the next card handoff.
+The comma then supplied 100 valid internal-model and pose messages in five seconds.
+The new image's physical boot, persisted identity and signed DATA update checks
+remain pending; public image and automatic release channel are unchanged.
+
+The Windows installer ZIP was extracted with CRC verification and its actual
+preparation CMD ran using the bundled portable Python from a Korean path with
+spaces. The resulting full 40 GiB image matched the R2 SHA256 above; no separate
+legacy hotfix was applied. The compressed image and installer ZIP were copied to
+the private NAS candidate directory and read back with matching full hashes.
+The ZIP SHA256 is
+`dfd8551acf72fb94ac387e740e583d8192460ba009ad32d85d654ba337be1b13`.
+
+The owner's identified 128 GB media was then recorded with R2. A full 40 GiB
+device readback matched the original image SHA256 before the separate owner
+public-key setup was added. That setup file was flushed and independently read
+back with a matching hash. Recording and readback finished on September 28;
+this is media verification, not a physical Jetson boot or power-loss result.
+
+A signed DATA-update trial from documentation-only commit `ef586a41637a` is
+staged at its immutable NAS model path. Its tar member contents, types, modes
+and links match the R2 runtime bundle except `SOURCE_COMMIT`. The actual HTTPS
+manifest signature and full bundle download hash passed verification. This
+prepares a controlled activation test; it does not establish successful on-device
+activation or change the stable channel. The owner cannot return to the vehicle
+during this PC handoff, so physical boot validation remains a separate next step.
+
+### Owner-confirmed public boot preview
+
+After installing the recorded R2 media, the owner reported normal operation,
+requested publication and stated that power was off. This supports an
+owner-reported boot result, not measured APP immutability, model validity,
+Wi-Fi/SSH recovery, DATA activation or power-cut endurance. Those instrumented
+checks remain pending; no power-cut cycles are claimed.
+
+The publisher now has a distinct `v0.4.0-boot-preview` path requiring the exact
+image's card readback, owner boot report and explicit publication request. Its
+manifest records that evidence basis and leaves unmeasured checks false. The
+existing fully measured `v0.4.0-protected-preview` gate is unchanged. The preview
+packages the same sanitized R2 image, with refreshed Korean/English instructions
+and a 30–90 minute card-writing estimate reflecting the observed 80-minute run.
+The public ZIP contains no owner setup. Existing image versions and the signed
+automatic runtime channel are retained; publishing this image does not validate
+or activate the prepared DATA-update trial.
