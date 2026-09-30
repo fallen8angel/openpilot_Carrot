@@ -154,6 +154,10 @@ class Controls:
     CC.latActive = self.carrot_controls.lat_suspend_control(CS, CC.latActive)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 
+    # AlwaysLateral must also stop while manager drains workers for this reboot.
+    if self.params.get_bool("ImpactDashcamReboot"):
+      CC.enabled = CC.latActive = CC.longActive = False
+
     actuators = CC.actuators
 
     # Enable blinkers while lane changing
@@ -420,7 +424,8 @@ class Controls:
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
-    cs.forceDecel = bool((self.sm['driverMonitoringState'].alertLevel == log.DriverMonitoringState.AlertLevel.three) or
+    cs.forceDecel = bool((not self.sm['driverMonitoringState'].dm2Disabled and
+                          self.sm['driverMonitoringState'].alertLevel == log.DriverMonitoringState.AlertLevel.three) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
 
 

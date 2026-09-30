@@ -23,8 +23,28 @@ allowance after input, rather than immediately resuming camera evaluation.
   can place the first warning around 55/110 seconds and terminal around 71/142
   seconds after input. These are requested experimental choices, not legal limits.
 - Confident forward attention for two seconds resets camera mode 1 without
-  renewing the interaction grace. Existing terminal alerts and lockout cannot be
-  reset by input, forward attention, camera recovery or empty-road expansion.
+  renewing the interaction grace. While monitoring remains enabled, terminal
+  alerts and lockout cannot be reset by ordinary input, forward attention,
+  camera recovery or empty-road expansion.
+- DriverMonitoringEnabled is persistent and defaults on. It is exposed only
+  through Carrot Web search for absent or failed DM-camera cases; leaving it on
+  is recommended. Turning DM off may violate applicable laws or driving
+  requirements, which depend on the jurisdiction and use conditions. Regardless
+  of gear or speed, including at standstill, three distinct physical vehicle CANCEL
+  presses, each separated by a release, within three seconds turn it off.
+  Automatic-control CANCEL echoes and BT CANCEL do not count. Another received
+  non-CANCEL button event, invalid/stale state, input-stream gap or timeout resets
+  the sequence. The
+  2026-09-29 follow-up removed the gear and speed restrictions; gear and speed
+  changes, including stopping, do not reset it by themselves.
+  Ambiguous stock-ACC speed-button echoes conservatively reset it because their
+  source cannot be distinguished. The three-CANCEL session marker stops the
+  model during normal onroad operation and blocks alerts, monitoring-triggered
+  forceDecel and lockout until the next ignition-on or manager/device restart.
+  That boundary clears only the session marker; monitoring resumes only if the
+  saved DriverMonitoringEnabled setting is on. A Web OFF remains off until
+  manually enabled again. Driver View retains face preview with neutral
+  enforcement.
 
 ## Stock boundary and state transitions
 
@@ -72,9 +92,11 @@ failure is not rendered harmless, and this does not add hardware hotplug recover
 Within one source, changing traffic context preserves elapsed attention seconds.
 Expansion cannot erase orange/red. A shortening that crosses terminal counts the
 terminal transition once. Fresh input may reset before terminal; once terminal
-is reached the stock disengagement/lockout behavior remains. A grace that expires
-cannot reopen merely because the road clears later. Mode 0 camera inputs stay
-stock; mode 1 uses fresh edges rather than a continuously held steering/gas state.
+is reached the stock disengagement/lockout behavior remains while monitoring is
+enabled. The persistent switch and separate session disable sequence gate the
+complete monitoring path rather than resetting policy awareness. A grace that expires cannot reopen
+merely because the road clears later. Mode 0 camera inputs stay stock; mode 1
+uses fresh edges rather than a continuously held steering/gas state.
 
 ## Traffic and input evidence
 
@@ -97,12 +119,73 @@ A continuously present moving object blocks this condition after the hold ends.
 Unknown coverage, stale input, curves or invalid observations cannot earn it.
 
 CarState is drained without conflation to retain short control edges. Stock-ACC
-speed-button injection configurations exclude ambiguous vehicle speed buttons.
-Other eligible controls and the existing independent BT attention journal remain.
-Learning/test, stale/startup/cancelled events and long-press automatic repeats do
-not count. Automatic ego/set-speed changes are never driver interactions.
+speed-button injection configurations exclude ambiguous vehicle speed buttons
+from interaction credit. They still reset a pending disable sequence because an
+automatic echo cannot be distinguished from a physical button that breaks three
+consecutive CANCEL presses. Other eligible controls and the existing independent
+BT attention journal remain. Learning/test, stale/startup/cancelled events and
+long-press automatic repeats do not count. Automatic ego/set-speed changes are
+never driver interactions.
+
+The monitoring-disable sequence consumes fresh physical CarState button press
+edges independently of the BT attention journal. A held CANCEL, repeated CAN
+packets and BT CANCEL cannot advance it. Received CANCEL presses immediately
+following openpilot's own control cancellation request are treated as automatic
+gateway echoes and excluded. This is a 150 ms correlation against the request,
+not confirmation that the controller transmitted CAN; a physical CANCEL that
+overlaps the request window can therefore be conservatively ignored and must be
+pressed again. Hyundai/Kia/Genesis openpilot-long bypasses this correlation:
+its controller does not transmit a CANCEL button from the longitudinal-control
+path, although `carControl.cruiseControl.cancel` can remain high while engaged.
+This prevents that internal level from hiding the first physical wheel press.
+Stock-long Hyundai and other platforms retain the echo filter. Suppression of
+the paired automatic release expires after 0.5 seconds. A physical press/release
+interleaved with a filtered echo can therefore make the following press require
+one extra release and press, while still preventing an automatic echo from
+contributing to the disable sequence. The sequence is
+eligible with valid, fresh vehicle state regardless of gear or speed, including
+at standstill. Gear and speed changes do not clear the pending count. Any other
+received non-CANCEL vehicle-button event, whether a press or release, clears the
+pending count. Stale or invalid state, loss of the input stream, or expiry of the
+three-second window also clears it. Each counted CANCEL requires a release before
+the next press.
 
 ## Configuration, diagnostics and documentation
+
+### Persistent enable and session disable switches (revised 2026-09-29)
+
+`DriverMonitoringEnabled` is a persistent boolean that defaults to true. Carrot
+Web exposes it through setting search only, rather than the ordinary menu. This
+switch is intended for an absent or failed DM camera; the recommendation is to
+leave the default ON unchanged. With the setting on, an unavailable camera still
+automatically selects interaction monitoring. Turning monitoring off removes
+that fallback too and may violate applicable laws or driving requirements.
+
+The three-CANCEL gesture sets the separate internal
+`DriverMonitoringSessionDisabled` marker without changing the persistent setting.
+Manager start and ignition-on clear this session marker only. Monitoring is
+enabled when `DriverMonitoringEnabled` is true and the session marker is false.
+A saved Web OFF survives later drives and restarts until the user manually turns
+the setting on again. Both switches are independent of the live
+`DriverMonitoringMode` and `CarrotVisionEnabled`; neither rewrites those values.
+File and QR backup generation excludes `DriverMonitoringEnabled`, and file, QR
+and profile restore paths ignore the key even when it is present in older data.
+Downloading a backup made before this policy also filters the key from the
+response. Resetting all settings to defaults remains allowed to restore the
+default ON value. Persistent OFF is therefore a deliberate local choice and
+cannot be transferred from another device's backup.
+
+During normal onroad operation, the disabled state stops driver-model execution
+and publishes a valid neutral monitoring heartbeat, so no driver-monitoring
+alert, force-deceleration request or lockout is applied. Driver View is the sole
+model-execution exception: after camera health recovery it may populate face and
+pose data for preview, while the published alert, awareness, force-deceleration
+and lockout fields remain neutral. Restoration constructs new runtime
+awareness state under the stored mode rather than treating restart as attention
+evidence. Any existing ignition-cycle `DriverTooDistracted` lockout remains
+persistent and is reloaded across a manager restart in the same ignition cycle.
+The CANCEL sequence is therefore a session monitoring switch, not another
+awareness reset and not a way to select mode 0.
 
 ### Original steering touch input (2026-09-28)
 
@@ -153,11 +236,11 @@ Without a usable camera, fresh continuous contact maintains wheel awareness
 before terminal alert in both modes. In camera mode 1 only a valid release-to-
 contact transition grants the existing interaction grace. Held contact and
 recovery while already held cannot renew camera grace. Camera mode 0 ignores
-this added signal, and terminal/lockout handling remains unchanged. No claim
+this added signal, and touch does not change terminal/lockout handling. No claim
 of gaze, sleep detection, legal certification or new-vehicle validation follows
 from capacitive contact or these desktop/log checks.
 
-DriverMonitoringMode is latched at startup: only value 1 is experimental. Old
+DriverMonitoringMode is read live every 0.5 seconds: only value 1 is experimental. Old
 DisableDM never opts users into mode 1; only its old video choice migrates once to
 independent CarrotVisionEnabled. The experimental-use confirmation remains.
 
@@ -165,20 +248,33 @@ New dm2VisionTimeoutFactor and dm2InteractionGraceRemaining fields complement th
 existing wheel factor and traffic hold. dm2ForwardRecovery now identifies a full
 forward-attention reset, and dm2InteractionCredit reports the full seconds restored
 by an input, not a fixed two-second credit. Historical packets retain their earlier
-semantics. Camera-unavailable notices and terminal forceDecel connections remain;
-this is not guaranteed emergency stopping or equivalent stock-ACC deceleration.
+semantics. While monitoring is enabled, camera-unavailable notices and terminal
+forceDecel connections remain; this is not guaranteed emergency stopping or
+equivalent stock-ACC deceleration.
 
-Korean/English guides and the localized catalog explain all four cases, grace
-composition, delayed sleep warnings, moving-target exclusions and terminal limits.
-Wiki MANUAL explanations are updated separately through the existing generator.
+Korean/English guides explain the search-only persistent switch, the session
+switch, physical CANCEL sequence, conditional restoration, all four monitoring cases,
+grace composition, delayed sleep warnings, moving-target exclusions and terminal
+limits. Wiki MANUAL explanations are updated separately through the existing
+generator.
 
 ## Validation and limits
 
-- 103 stock/DM2 policy, daemon-adapter and Bluetooth tests passed. Coverage includes
+- Focused disable-sequence coverage checks the inclusive three-second boundary,
+  release-to-press edges, held packets, lost releases, timeout restart, other
+  button reset, invalid/stale state and automatic CANCEL echo rejection.
+  Dispatcher coverage checks that the third fresh physical CANCEL press writes
+  the session marker, retries until observed and publishes a valid neutral
+  disabled state. Manager coverage clears that marker at ignition-on or manager
+  start and keeps dm2d alive while
+  stopping ordinary onroad model execution. Disabled Driver View coverage keeps
+  face preview while driver-state consumers gate alerts, lockout, forceDecel and
+  the onroad driver-monitor indicator from the published disabled state.
+- Stock/DM2 policy, daemon-adapter and Bluetooth tests cover
   all four modes, exact timing stages, sustained sleep/eye/phone detection, actual
   dispatcher BT grace, reset/expiry, context shortening, source recovery, terminal
   counters, lockout and stock camera mode-0 equivalence.
-- 60 traffic/context/config and settings-schema tests passed, including noise
+- Traffic/context/config and settings-schema tests cover noise
   persistence, twenty-second entry hold, dropout association and empty-road gates.
 - Focused Python lint passed. Stock policy and daemon content remain unchanged.
 - User-docs and Wiki validation accompany publication; generator tests are run.
@@ -192,3 +288,28 @@ are retained locally under .analysis/archive/2026-09-28/dm2-revision/.
 
 Public guides: [Korean](user/ko/driver-monitoring.md),
 [English](user/en/driver-monitoring.md).
+
+
+## Live mode switching (2026-09-28)
+
+The running dispatcher polls the typed mode parameter every 0.5 seconds before
+configuring the current camera/traffic context. The retired CARROT_DM_MODE
+environment latch is ignored and removed at manager initialization. The existing
+monitor, calibration, interaction-edge history, traffic hold, elapsed awareness,
+terminal counters and lockout are retained. The published dm2Experimental reports
+the applied mode, not the initial startup choice.
+
+Actual mode changes expire old interaction grace and the forward-attention streak;
+re-reading an unchanged setting leaves these intact. configure_context remaps the
+active budget by elapsed seconds, so shortening a budget can cause a warning
+immediately. Existing orange/terminal alerts cannot be erased by increasing the
+budget. Repeated toggles neither reset accumulated time nor resurrect old inputs.
+This does not change either mode's thresholds, existing attention recovery,
+confirmed-parking reset, or the experimental-use confirmation.
+
+Validation uses real policy/cereal with desktop adapters for native IPC/Params;
+device polling latency and physical driving behavior remain unvalidated.
+All 208 focused monitoring/touch tests and 25 Wiki generator/validator tests
+passed. Four native typed-Params migration cases were skipped on Windows; the
+strict fake-Params migration tests passed. Local evidence is retained under
+`.analysis/archive/2026-09-28/dm-live/`.
