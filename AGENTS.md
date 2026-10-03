@@ -1,5 +1,30 @@
 # Repository memory
 
+- On 2026-10-03, the user selected existing combined handover mode 3 as
+  standard for Hyundai/Kia/Genesis angle control and removed the selector.
+  CarController always uses mode 3 inside ANGLE_CONTROL; SteerHandoverMode
+  registration, catalog/menu and runtime reads are removed. Saved values no
+  longer affect behavior. Preserve the combined algorithm, thresholds, targets,
+  angle/CAN limits, torque-control paths and touch/DM. Internal helper variants
+  remain for comparisons; diagnostics still identify mode 3. 83 steering tests,
+  45 settings tests, 25 Wiki tests and 6,000-frame old-mode-3/new CAN equality
+  pass on desktop with Windows Params storage substituted. This promotion is
+  not a new retry fix or vehicle-response validation. See
+  docs/steering_handover_20260930.md.
+
+- On 2026-10-02, after the native CPU experiment and Ioniq 5 PE before/after
+  logs, the user explicitly approved promotion to `carrot-wip` and deletion of
+  the remote `carrot-native-cpu` branch. Keep the tested Cython radar statistics/
+  path projection and CAN extraction/packing kernels, Python comparison/fallback,
+  strict floating-point build flags and backend timing diagnostics. Preserve
+  radar algorithms, history, thresholds, validity, counters and CPU placement.
+  The discussed trajectory prefilter is deferred and must not be included.
+  Ioniq 5 logs confirm native activation and core5 mean 77.7 -> 70.9%, but input
+  workload differs; same-input replay matches all 2,400 radar frames with 30-31%
+  lower PC compute time. EV9 overloaded mode-3 native vehicle behavior is still
+  unvalidated. Maintain native x86/ARM CI and the shared NAS replay build.
+  See docs/native_cpu_experiment_20261002.md.
+
 - On 2026-10-01, Casper EV `00001e75--ace5ac2325--9` confirmed SCC-only mode 0
   with every SCC lateral measurement zero. The user requested always using the
   measured SCC object in SCC-only modes and ignoring unreliable SCC lateral
