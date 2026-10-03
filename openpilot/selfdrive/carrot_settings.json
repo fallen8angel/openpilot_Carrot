@@ -404,6 +404,7 @@
           "zh": "CANFD·HDA",
           "params": [
             "CanfdHDA2",
+            "HyundaiCanfdClusterDirectTx",
             "CanfdDebug",
             "HDPuse"
           ]
@@ -2395,13 +2396,13 @@
       "group": "레인모드",
       "name": "UseLaneLineSpeed",
       "title": "레인모드: 속도(0)",
-      "descr": "설정 속도 이상일 때 레인모드로 전환합니다.",
+      "descr": "설정 속도 이상일 때 레인모드를 사용합니다. 모델 속도 궤적의 시작값이 실제 차속의 70% 미만이거나 끝값이 시작값의 70% 미만이면 레인리스로 전환하며, 약 1초간 정상 조건을 확인한 뒤 복귀합니다.",
       "egroup": "LANE",
       "etitle": "Laneline: Speed(0)",
-      "edescr": "Switches to LaneMode when speed exceeds the set speed",
+      "edescr": "Uses lane mode above the set speed. Temporarily switches to laneless if model speed starts below 70% of measured speed or ends below 70% of its starting value; recovery requires about one second of acceptable conditions.",
       "cgroup": "转向",
       "ctitle": "车道线: 速度 (0)",
-      "cdescr": "当速度超过设定速度时切换到车道模式",
+      "cdescr": "超过设定速度时使用车道模式。模型速度轨迹的起点低于实测车速的70%，或终点低于起点的70%时，暂时切换为无车道线模式；正常条件持续约1秒后才可恢复。",
       "min": 0,
       "max": 200,
       "default": 0,
@@ -2721,6 +2722,24 @@
       "max": 1,
       "default": 0,
       "unit": 1
+    },
+    {
+      "group": "시작",
+      "name": "HyundaiCanfdClusterDirectTx",
+      "title": "계기판 CAN 직접 송신",
+      "descr": "현대·기아·제네시스 CAN-FD CameraSCC 차량에서 간헐적인 계기판 경고가 발생할 때 켜서 비교하세요. 계기판 메시지를 기존 직접 송신 방식으로 보냅니다. 모든 차량에서 기본 꺼짐이며, 변경 후 기기를 재부팅해야 적용됩니다.",
+      "egroup": "START",
+      "etitle": "Cluster CAN Direct Send",
+      "edescr": "For Hyundai/Kia/Genesis CAN-FD CameraSCC vehicles with intermittent cluster warnings, enable this to compare the original direct-send method for cluster messages. Defaults to OFF for every vehicle. Reboot the device after changing it.",
+      "cgroup": "启动设置",
+      "ctitle": "仪表 CAN 直接发送",
+      "cdescr": "现代、起亚、捷尼赛思 CAN-FD CameraSCC 车辆出现间歇性仪表警告时，可开启此项以对比原有的仪表消息直接发送方式。所有车辆默认关闭。更改后须重启设备。",
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "unit": 1,
+      "control": "toggle",
+      "risk": "high"
     },
     {
       "group": "시작",

@@ -34,6 +34,9 @@ def clip_ribbon(projected, clip, allow_invert=True):
 def project_ribbon(line, half_width, z_offset, max_idx, transform, clip, allow_invert=True,
                    max_distance=None, y_shift=0., start_idx=0):
   """C3 adds an interpolated distance endpoint; C4 uses only recorded nodes."""
+  if active() and hasattr(native_draw._draw_native, 'project_ribbon_batch') and line.dtype in (np.float32, np.float64):
+    return native_draw._draw_native.project_ribbon_batch(line, half_width, z_offset, max_idx, transform, clip,
+                                                        allow_invert, max_distance, y_shift, start_idx)
   points = line[start_idx:max_idx + 1]
   if max_distance is not None and 0 < max_idx < len(line) - 1:
     p0, p1 = line[max_idx:max_idx + 2]

@@ -14,6 +14,50 @@ ctypedef fused coordinate:
   double
 
 
+def project_ribbon_batch(const coordinate[:, :] line, double half_width, double z_offset, Py_ssize_t max_idx,
+                         transform, clip, bint allow_invert=True, max_distance=None, double y_shift=0., Py_ssize_t start_idx=0):
+  """Prepare both sides in one allocation; retain NumPy's exact matrix product."""
+  cdef Py_ssize_t first, stop, step, i, j = 0, n = 0
+  cdef float left_y = -half_width + y_shift, right_y = half_width + y_shift, dz = z_offset
+  cdef coordinate x, y, z
+  cdef bint endpoint = max_distance is not None and 0 < max_idx < line.shape[0] - 1
+  if line.shape[1] != 3:
+    raise ValueError('expected (N,3) points')
+  first, stop, step = slice(start_idx, max_idx + 1).indices(line.shape[0])
+  for i in range(first, stop):
+    if line[i, 0] >= 0:
+      n += 1
+  if endpoint:
+    # np.interp owns repeated-node/NaN/boundary behavior and float64 rounding.
+    x = max_distance
+    y = np.interp(max_distance, [line[max_idx, 0], line[max_idx+1, 0]], [line[max_idx, 1], line[max_idx+1, 1]])
+    z = np.interp(max_distance, [line[max_idx, 0], line[max_idx+1, 0]], [line[max_idx, 2], line[max_idx+1, 2]])
+    if x >= 0:
+      n += 1
+    else:
+      endpoint = False
+  if n == 0:
+    return np.empty((0, 2), dtype=np.float32)
+  sides = np.empty((2, n, 3), dtype=np.float32 if coordinate is float else np.float64)
+  cdef coordinate[:, :, ::1] out = sides
+  for i in range(first, stop):
+    if not line[i, 0] >= 0:
+      continue
+    out[0, j, 0] = out[1, j, 0] = line[i, 0] + <coordinate>0.
+    out[0, j, 1] = line[i, 1] + left_y
+    out[1, j, 1] = line[i, 1] + right_y
+    out[0, j, 2] = out[1, j, 2] = line[i, 2] + dz
+    j += 1
+  if endpoint:
+    out[0, j, 0] = out[1, j, 0] = x + <coordinate>0.
+    out[0, j, 1] = y + left_y
+    out[1, j, 1] = y + right_y
+    out[0, j, 2] = out[1, j, 2] = z + dz
+  projected = (transform @ sides.reshape(2*n, 3).T).reshape(3, 2, n)
+  # Transform and line can have different dtypes. Dispatch by product dtype.
+  return clip_ribbon(projected, clip.x, clip.x + clip.width, clip.y, clip.y + clip.height, allow_invert)
+
+
 def offset_sides(const coordinate[:, :] points, float left_y, float right_y, float left_z, float right_z):
   """Keep the original float32 offsets, including for float64 input points."""
   cdef Py_ssize_t i, n = points.shape[0]
@@ -45,6 +89,20 @@ def path_sides(const double[:, :] points, const double[:] y_offset, const double
     result[0, i, 2] = points[i, 2] + z_offset[i]
     result[1, i, 2] = points[i, 2] + z_offset[i]
   return out
+
+
+def project_path_batch(line, double width, double z_start, double z_end, transform, clip, bint allow_invert=True):
+  """Keep interpolation/BLAS rounding while preparing and clipping in one call."""
+  points = np.asarray(line, dtype=np.float64)
+  if points.ndim != 2 or points.shape[1] != 3:
+    raise ValueError('expected (N,3) points')
+  if len(points) == 0:
+    return np.empty((0, 2), dtype=np.float32)
+  z_off = np.interp(points[:, 0], [0., 100.], [z_start, z_end])
+  y_off = np.interp(z_off, [-3., 0., 3.], [1.5, .5, 1.5]) * width
+  sides = path_sides(points, y_off, z_off)
+  projected = (sides @ transform.T).transpose(2, 0, 1)
+  return _clip_ribbon[double](projected, clip.x, clip.x + clip.width, clip.y, clip.y + clip.height, allow_invert, None)
 
 
 cdef _clip_ribbon(const coordinate[:, :, :] projected, coordinate x_min, coordinate x_max,
