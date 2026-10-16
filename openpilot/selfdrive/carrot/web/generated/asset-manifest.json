@@ -34,7 +34,7 @@
       "kind": "bundle",
       "source": "src/entries/tools.js",
       "path": "js/generated/tools.js",
-      "hash": "4816ef1b91c0cc6069fa9f90c9854e552935a1ee3ae1c9db31ed547dfae0573f"
+      "hash": "326d4534c6fe5d78463a8d66f7adf55fd9e528f52789ed5488c7c89985bab871"
     },
     {
       "id": "logs.runtime",

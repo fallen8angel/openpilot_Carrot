@@ -15,8 +15,15 @@ def input_view(buffer, shape, dtype, offset=0):
   from tinygrad import Tensor
   from tinygrad.uop.ops import UOp
 
-  buf = buffer.view(math.prod(shape), dtype, offset).ensure_allocated()
-  return Tensor(UOp.from_buffer(buf)).reshape(shape)
+  if hasattr(buffer, 'dtype'):
+    # Cinque and the earlier MDM runtime carry the dtype on each Buffer.
+    buf = buffer.view(math.prod(shape), dtype, offset).ensure_allocated()
+    uop = UOp.from_buffer(buf)
+  else:
+    # Retrained MDM uses byte-addressed storage; interpretation belongs to UOp.
+    buf = buffer.view(math.prod(shape) * dtype.itemsize, offset).ensure_allocated()
+    uop = UOp.from_buffer(buf, dtype)
+  return Tensor(uop).reshape(shape)
 
 
 def model_metadata(jits):
@@ -103,6 +110,16 @@ class GenericModelRuntime:
         self.queues[name] = input_view(self.device_buffer, value.shape, dtypes.float32, value.ctypes.data - self.packed.ctypes.data)
     self.transforms = input_view(self.device_buffer, (2, 3, 3), dtypes.float32)
     self.frames = input_view(self.device_buffer, (2, self.frame_size), dtypes.uint8, self.frames_offset)
+
+  def reset_state(self):
+    from tinygrad import Device, Tensor
+    # Same initial zero state and buffer identities as construction; captured
+    # recurrent outputs must continue to alias their original inputs.
+    for name in self.state_pairs:
+      tensor = self.queues[name]
+      zeros = Tensor(np.zeros(tensor.shape, dtype=self.specs[name][1]), device='NPY')
+      tensor._buffer().copy_from(zeros._buffer())
+    Device[self.device].synchronize()
 
   def run(self):
     progress = getattr(self, 'progress', lambda stage: None)

@@ -12,6 +12,10 @@ MAX_BYTES = 32768
 
 
 def requested(path=ENABLE_PATH):
+  from openpilot.selfdrive.carrot.signal_mode import flag_override
+  override = flag_override(path)
+  if override is not None:
+    return override
   try:
     return Path(path).read_text().strip() == '1'
   except OSError:
@@ -37,18 +41,24 @@ def publish_observation(result, frame_id, timestamp, session, path=OBSERVATION_P
 class SignalAssistRuntime:
   def __init__(self, enable_path=ENABLE_PATH, observation_path=OBSERVATION_PATH):
     self.enable_path, self.observation_path = Path(enable_path), Path(observation_path)
-    self.assist = SignalAssist() if requested(self.enable_path) else None
+    self.assist = SignalAssist(producer_red_history=requested(self.enable_path.parent / 'revalidated_enabled')) if requested(self.enable_path) else None
     self.last_mode_check = -1.
     self.enabled = self.assist is not None
     self.last_log = -1.
     self.last_decision = None
     self.read_ms = 0.
+    self.enabled_since = -float('inf')
+    self._observation_bytes = None
+    self._observation = None
 
   def read(self, sm, now=None):
     now = time.monotonic() if now is None else now
     start = time.monotonic()
     if now - self.last_mode_check >= .5:
-      self.enabled = requested(self.enable_path)
+      enabled = requested(self.enable_path)
+      if enabled and not self.enabled:
+        self.enabled_since = now
+      self.enabled = enabled
       self.last_mode_check = now
     observation = None
     if self.enabled:
@@ -56,11 +66,24 @@ class SignalAssistRuntime:
         with self.observation_path.open('rb') as f:
           raw = f.read(MAX_BYTES + 1)
         if len(raw) <= MAX_BYTES:
-          obj = json.loads(raw)
+          # Re-read the endpoint every cycle, but decode identical bytes once.
+          # Consumers treat this packet as read-only. Freshness, mode and vehicle
+          # context are still checked on every use, never cached with the JSON.
+          if raw != self._observation_bytes:
+            self._observation = json.loads(raw)
+            self._observation_bytes = raw
+          obj = self._observation
           if obj.get('version') == 1 and obj.get('stream') == 'road' and obj.get('size') == [1344, 760]:
-            observation = obj
+            if obj.get('timestamp', -float('inf')) >= self.enabled_since:
+              observation = obj
+        else:
+          self._observation_bytes = self._observation = None
       except (OSError, ValueError, TypeError, AttributeError):
-        pass
+        self._observation_bytes = self._observation = None
+    if not self.enabled:
+      self._observation_bytes = self._observation = None
+      self.read_ms = (time.monotonic() - start) * 1000
+      return None, dict(now=now, enabled=False, valid=False, drive=False)
     services = ('carState', 'modelV2', 'radarState', 'selfdriveState', 'carControl')
     valid = all(sm.seen[s] and sm.valid[s] and sm.alive[s] and 0 <= now - sm.recv_time[s] <= .25 for s in services)
     cs, sd, cc = sm['carState'], sm['selfdriveState'], sm['carControl']
@@ -71,10 +94,9 @@ class SignalAssistRuntime:
 
   def record(self, decision, speed, distance):
     now = time.monotonic()
-    value = asdict(decision)
     key = (decision.hold, decision.red_sign, decision.released, decision.track_id)
     if key != self.last_decision or now - self.last_log >= 1.:
       from openpilot.common.swaglog import cloudlog
-      cloudlog.event('signalAssist', **value, speed=float(speed), model_stop_distance=float(distance),
+      cloudlog.event('signalAssist', **asdict(decision), speed=float(speed), model_stop_distance=float(distance),
                      transport_read_ms=self.read_ms, enabled=self.enabled)
       self.last_decision, self.last_log = key, now
