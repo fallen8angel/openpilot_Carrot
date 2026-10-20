@@ -1,5 +1,75 @@
 # Repository memory
 
+- On 2026-10-20, owner reports default-only Jetson panel with ignition/P and
+  authorizes agent-controlled offroad. SD enrollment/cache succeeded, but prior
+  boot gate still approved989386eb; comma a4e57bad rejects legacy USB HUD and
+  dedicated AP waits for offroad. Fresh P/zero/standstill/inactive/panda guard,
+  existing snapshot startup hold plus onroad cycle and30min restoration watchdog
+  produce real offroad. AP starts; normal Jetson reboot/probe activates signed
+  b7b463a20b and autojoins WLAN. Restore original absent snapshot hold/onroad.
+  Physical USB H264 renderer reports10Hz/26 live services;12 receiver samples
+  and13 sender samples connected over60s, final HUD connected. Native model/DM
+  each1200 valid consecutive at19.99812/19.99857Hz (~20, not strict>=20).
+  Old80eedcdd model unchanged. No map bytes, independent visual confirmation,
+  road/RF recovery/long stability or new full-image claim. Nav hardware only;
+  wip runtime unchanged. Raw private. See docs/jetson_wifi_usb_panel_20261020.md.
+
+
+- On 2026-10-20, user requests comma-to-Jetson HUD/navigation over Wi-Fi,
+  no USB fallback, and complete ESP32-S3 display retirement. S3 code, firmware,
+  pairing tools and installer routes removed both branches; shared renderer
+  opens USB directly, preserving Jetson panel hotplug. Nav-only Wi-Fi integrates
+  tjdgus200 b09e20a1 with both-end USB display rejection and no Jetson display
+  pumps in inference. Dedicated AP starts offroad; model/provisioning USB stays.
+  Signed nav runtime b7b463a20b published and pinned, old80eedcdd ONNX unchanged;
+  latest n16 Jetson model remains deferred. Owner SD patched6144 APP bytes with
+  verbatim original setup retained; verified FAT payload/runtime pre-cache,
+  independent ext4/GPT readback; DATA journal/model/key not written. Next boot
+  performs one-time receiver enrollment/cache, then ordinary boot gate probes
+  and activates selected runtime. SD prepared, NOT boot/hardware tested.
+  Desktop52 integration and41 retirement tests/4Windows skips; Linux94 root,
+  845 broad/55skips,119 nav,11 real-storage pass; eGPU and installer CI pass.
+  No physical RF/display-rate/20Hz/road claim. Wip retains its separate runtime.
+  Private backups excluded; single-parent. See docs/jetson_wifi_usb_panel_20261020.md.
+
+- On 2026-10-19, offroad Mapbox review finds real navd allManeuvers failure:
+  np.cumsum yields numpy.float64, rejected by device Capnp struct-list setter.
+  Convert distance to Python float at serialization only. Six real-cereal cases
+  fail before/pass after on nav; wip old sums already pass, same boundary guard
+  ported without model/route changes. Nav93 pass/9 native-render skips; wip22 pass.
+  Exact corrected source in isolated C4 /tmp trial:44 synthetic route positions,
+  actual Mapbox tiles/Carrot bridge/native VisionIPC/MapInput pixels match;
+  warm10.109-20.089ms, IPC+checks0.913-1.623ms. Host-shaped buffers only, no
+  driving-model inference/20Hz/steering claim. Cold537ms (earlier885ms) still
+  exceeds500ms gate; not fixed. Operational code/Params/processes unchanged,
+  no vehicle installation. Both maintained branches single-parent. See
+  docs/mapbox_instruction_serialization_20261019.md; tokens/evidence private.
+
+
+- On 2026-10-19, Ioniq9 route417/19 on5032afca77 reproduces retained stopped-red
+  memory after lead-follow departure: target-4.497/output-4/measured-3.616m/s2
+  at road speed, no new signal tracks, gas intervention at6.395s. Retire both
+  start/legacy stopped latches above5km/h; preserve low-speed hold and fresh
+  moving-red approach. Track auxiliary ownership to clear orphan e2eStopped
+  after mode/invalid reset; preserve user/soft/stay stops. Gate final output by
+  speed too. Seeded recorded-input127-pair replay: logged56/old55/new0 holds;
+  no native MPC or closed-loop claim. Prior segment/latch origin unavailable.
+  Both branches704 focused tests pass including61 new cases. Raw private; no
+  vehicle install. See docs/signal_departure_hold_20261019.md.
+
+
+- On 2026-10-19, user selects pearl cartoon DM eyes for both C3/C4. Replace
+  shared onroad camera inset with plain Widget: no video client/shader/textures
+  or box. Bounded mirrored head pose is illustrative, not ocular gaze; eyelids
+  use actual per-eye blink/confidence, no decorative random blinking. Preserve
+  freshness/session gates plus 500ms repeated-frame guard; gray unknown eyes,
+  warning/lockout and wheel fallback, alert hiding/AlwaysOnDM and RHD selection.
+  No monitoring/model/control/settings/sound changes. 75 focused and 180 wider
+  UI/sound tests pass (one Windows native-IPC exclusion); desktop actual-renderer
+  captures cover both sizes with synthetic inputs/schematic HUD. No physical
+  vehicle installation, readability or CPU/road validation. Both maintained
+  branches single-parent. See docs/dm_pearl_eyes_20261019.md.
+
 - On 2026-10-19, user confirms company/hotspot share SSID and explicitly requests
   disconnect/reconnect testing without waiting for another hotspot. App-only S3
   1.2.1 preserves pairing: separate association/IP states,30s/20s watchdogs,
