@@ -1,5 +1,80 @@
 # Repository memory
 
+- On 2026-10-20, owner clarifies initial red errors are comma upper-right
+  Jetson badge. Distinguish normal boot-runtime handoff; first-handshake
+  timeout/explicit no-reader wait stays connecting for<=120s before first ready.
+  Preserve model/protocol/signature/cleanup/runtime failures, deadlines,
+  transport retry and actual control alerts. Korean waiting/preparing badges.
+  Nav122/wip120 focused tests; actual C4 draw method desktop render checked.
+  Further drive review finds missing model frame18031 present in both cameras,
+  SOF skew11.302us; recorded metadata passes existing pairing. Exact reader
+  delay remains unknown. Add bounded previous/current-cycle camera gap trace,
+  <=1Hz on gaps only, no validity/model change. Native fake-input overhead
+  ~11us/pair; not real camera timing or a locationd fix. Comma Git Pull/reboot;
+  existing signed NAV host pin retained. No live install. Raw private.
+  Nav CI39389864670:94root/923broad(56skip)/119nav/11storage/11NAT pass;
+  wip CI39389916455:735broad(2skip)/119nav/11storage pass; both Windows pass.
+  See docs/jetson_startup_badge_20261020.md.
+
+- On 2026-10-20, owner clarifies missing map is Jetson USB screen mode7.
+  C4 NAV256 preview is fresh but absent from host snapshot/files; received
+  phone960x540 video is a different map. Forward bounded PNG only through
+  explicit Wi-Fi publisher opt-in; validate source/transport age, digest,
+  dimensions and decode in host HUD adapter. Preserve96KiB budget and hide
+  stale/missing images. Desktop55pass/2skip, actual draw method with graphics
+  double; physical activation pending Git Pull plus BOTH reboots. No live patch.
+  DATA live40% used/9.53GiB free, fixed16GiB inside40GiB image on119.375GiB card;
+  capacity adequate, no resize/cleanup. Three full drive segments show one
+  camera frame gap18030->18032, invalid odometry, pose inputs false57.7ms,
+  alert1.985s; sensors/posenet healthy, no locationd exit. Model loop max83.801ms
+  is window evidence, not a unique delay cause. No alert/validity/model changes.
+  CI39386479268 passes94root/868broad(56skip)/119nav/11storage/11NAT.
+  Signed hostc8a95308b0 published, full HTTPS size/hash verified; N16 unchanged.
+  Nav runtime only; wip record only. Raw private.
+  See docs/jetson_nav_preview_drive_20261020.md.
+
+- From 2026-10-20, user requires all normal delivery through comma Git Pull
+  and restart/reboot. Design and package changes for that path; per-device
+  SSH copies, Params edits, service manipulation and cache seeding are not
+  normal user installation steps. Use Jetson USB patch/install only when
+  the installed bootstrap cannot recover through the ordinary updater.
+  Current boot-gated runtime selection requires Jetson reboot too; keep
+  actual offroad and Internet throughout preparation. Do not claim a
+  comma-only restart activates a new already-running Jetson release.
+  See docs/jetson_update_policy_20261020.md for the delivery contract,
+  AP Internet-sharing correction and outstanding end-to-end validation.
+
+- On 2026-10-20, read-only owner checks reproduce Jetson NAS timeout while
+  comma HTTPS works: AP/DNS/forwarding active, no NAT, default nft backend
+  unsupported, legacy backend operational. Nav AP now owns one scoped
+  masquerade rule with backend probing, offroad-only setup/retry and exact
+  cleanup; Internet failure preserves local HUD Wi-Fi. No USB/OS/model change
+  or live installation. Desktop70pass/4skip; CI39369739310 passes94 root,
+  855 broad/56skip,119 nav,11 storage,11 NAT including real isolated packets.
+  Do not claim an uncached physical Git Pull/reboot update has been validated.
+  Wip receives delivery policy/docs only, preserving its runtime.
+
+
+- On 2026-10-20, user supersedes earlier model deferral and requests contributor
+  Jetson N16 port (reviewed cf036fa578/a1d723a6b4). Official ONNX01effc67,
+  814591107B, shares eGPU N16 checkpoint96244b1f/12800 export family; embedded
+  ONNX checkpoint omits step suffix. PKL/TRT equivalence is not established.
+  Port identity/label only to nav; keep existing recurrence, USB inference,
+  signed NAS trust and Wi-Fi/local-USB HUD. Wip model/runtime unchanged.
+  Independent full ONNX checks and148 CPU raw/patched frames exactly equal;
+  desktop91pass/1skip, Linux94root+845broad/55skip+119nav+11storage pass.
+  Signed runtime abac23f644 and comma5a0e8158 applied under fresh P/inactive
+  guards. NAS fetch timeout uses hash-verified WLAN cache transfer; normal
+  boot probe builds45.3s new TRT10.3 plan and passes actual finite inference.
+  Manager restart retains env/affinity; final offroad setup and daemon restart
+  recover an existing disappearing-DHCP-PID cleanup race (not fixed here).
+  Restore both temporary holds/onroad. Final300s model/DM each
+  6000/6000 valid consecutive at19.99947/19.99927Hz,
+  sender61/61 and receiver60/60 connected, USB renderer~10Hz.
+  Approx20Hz only; no actual-map, road, PKL/TRT or long-stability claim.
+  Raw private. See docs/jetson_n16_integration_20261020.md.
+
+
 - On 2026-10-20, owner reports default-only Jetson panel with ignition/P and
   authorizes agent-controlled offroad. SD enrollment/cache succeeded, but prior
   boot gate still approved989386eb; comma a4e57bad rejects legacy USB HUD and
