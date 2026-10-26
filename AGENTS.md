@@ -1,5 +1,195 @@
 # Repository memory
 
+- On 2026-10-26, owner requests PR564/562 review and necessary integration.
+  PR564 9d2a435ed332 selects existing spawn=True only for qcomgpsd; preserve
+  TICI/onroad/external-GPS conditions and control checks. Import actual-process
+  crash/restart/duplicate/stop/fork-state regressions. New selection check fails
+  old Windows code; revised49pass/4POSIXskip per branch. Linux startup-recovery
+  164pass each: NAV40293232812/Wip40293233388/Blink40293263275; both maintained
+  eGPU compatibility checks pass, lint/docs validator pass. Code NAV4ad26a8d2a,
+  Wip2fe2caf608,Blink753f15b545 published single-parent. PR562 remains52e05c01:
+  callback reassertion already integrated; retain empty-port/conflict guards,
+  reject unconditional attached-boot cut/nonzero override/global link block.
+  No new physical GPS, current, road or all-stall cure claim; no live install.
+  Comma Git Pull/restart delivery, no Jetson update/model change. Review:
+  docs/pr564_562_review_20261026.md. Unrelated concurrent Jetlink work preserved.
+
+- On 2026-10-24, owner requests further measured Jetson latency improvement.
+  NAV HUD libx264 encoder/conversion pools default one worker each; actual
+  FFmpeg16->2threads,462x1920/10FPS/all-I/bitrate/priorities unchanged.
+  Wip common optional flag/tests only, no HUD default/model/runtime change.
+  Parked A/B/A means39.724/39.524/39.611ms; repeated B/A39.577/39.627ms:
+  gain0.143ms versus surrounding means,repeat0.050ms/P99gain0.888ms.
+  All model/DM/cameras/odom valid consecutive,pose healthy; no hard50ms claim.
+  HUD pause improves~1ms but combines renderer/encoder/USB resources; USBsend
+  does not improve,not proof of wire contention. Inference cores0/1 trial
+  39.587vs39.591ms gives no meaningful gain; masks restored,not adopted.
+  Restored-affinity59.500ms tail retained; full latency/locationd cure unproven.
+  126desktop/7skip; native Orin codec geometry/color/count checks pass both
+  modes/sizes. NAV CI40098966251 passes1468/56skip+94update/119nav/11storage/
+  11NAT/62codec plus Windows; Wip40098976544 passes. Signed64749015B host
+  c3f2aeebf6 full HTTPS/hash verified; normal Git Pull/restart e5abf9928f and
+  Jetson boot updater physically installed it,N16SHA01effc67 unchanged.
+  PinCI40099276579/eGPU40099276515 pass. Final59.907s1198 valid consecutive
+  model/DM/cameras/odom/healthy pose,mean39.427/P9943.760/max49.844ms,0>50;
+  no alerts,all P/inactive guards,NAV/link/HUD119/119. Display10Hz,30/30 map
+  advancing and signal online,decode drops0; no physical visual/road claim.
+  Original snapshot absence/onroad restored,watchdog exited,trial overlays
+  absent; no new affinity policy. Raw private. Details:
+  docs/jetson_regression_isolation_20261024.md.
+
+- On 2026-10-24, owner reiterates map-after-inference/HUD-next-frame trial.
+  Prior DIRECT_MAP=0 did NOT test this. Exact-N16 negotiated map references
+  move uint8 packing/transmission after camera submission; current camera/nav
+  vector preserved, one source-aged cache, route/cancel/reset/gap/expiry gates,
+  150ms transit+50ms use reserve, no same-image TTL refresh. New map may apply
+  one nominal50ms model cycle later; no driving-equivalence/road claim.
+  Parked valid-NAV ON/OFF120s each2401 valid consecutive model, healthy DM/
+  cameras/odom/pose, no alerts, NAV/link/HUD120/120. Means39.778/40.317ms,
+  P9944.546/44.947,max48.033/48.284,0>50: mean gain0.538ms/1.33%.
+  ON reference use99.873%,critical393476B vs458996B,IPC84B vs60B; map staged
+  ~5Hz,server25.624/25.588ms unchanged. Earlier mixed-NAV baseline40.445
+  kept separate.239desktop/44skip; Linux1468/56skip+94update/119nav/11storage/
+  11NAT and Windows/eGPU pass. Signed64748504B host0fb6c73926 fullHTTPS/hash
+  verified and normal boot-updater installed; N16 SHA01effc67 unchanged.
+  fc2109c436 defaultON,explicit JETLINK_DEFER_NAV=0 and old-peer fallback;
+  final-default CI40080920733/eGPU40080920752 pass. Wip N16/runtime unchanged.
+  Earlier direct zoompilot main d24328d differs from pinnedb1d70418 only in
+  formatting/test text; SysfsGadget per-port LPM hint yields actual repeated
+  ON41.131/OFF40.142ms,NAV117/119of120,0>50. Scoped root pipe/journal lease
+  tested idle30.152s,EOF,SIGTERM,SIGKILL recovery; originalu1_u2 restored.
+  NAV907cfc5 enables measured LPM-off lease/deferred8KiB; production lease
+  now owns exact active port, not a permanent global quirk. Deferred32 alone
+  moved waits, no meaningful mean gain;8KiB alone higherCPU/no mean gain.
+  Wip5bbaf88234 has common opt-in transport only; both CIs pass. No pressure
+  soak, hard50ms bound or full disconnect/locationd/reboot-root-cause claim.
+  Final normal defaults60s:1200 valid consecutive model/cameras/odom,1201DM/
+  healthy pose,NAV/link/HUD60/60,mean39.612/max46.309,0>50,reference100%.
+  USB HUD/map60/60 fresh in OFF/ON,960x540 advancing,decode drops0; screen0
+  excludesmode7preview, not modelNAV. Finalfc2109c436 tracked-clean, no trial
+  modeld/jetlinkd flags, snapshot absent/onroad/P/inactive/pose verified;
+  private root0600 boot-env profile deleted. Normal production LPM lease stays.
+  Details: docs/jetson_regression_isolation_20261024.md.
+  Raw logs/private restart environment excluded from publication.
+
+- On 2026-10-23, owner requests review/application of PR560/561/562.
+  560 staging/os fix already in e4779e059a; retain newer N16 defaults. Add
+  missing full2066-output precedence; actual parser regression fails old/passes
+  corrected.561 adds exact-state absent-/proc DHCP cleanup to existing5s wait;
+  default-OFF g1 ADB handoff also requires privileged-owner/nonwritable marker.
+  No marker enabled; PC ADB impact/sysfs race and physical Konik limits retained.
+  562 unconditional attached-boot cutoff/nonzero override/link-block rejected;
+  adapt callback reassertion only under original empty-port/conflict gates.
+  Common helpers both branches, parser NAV only.126desktop pass/31POSIX skips;
+  Linux CI passes NAV1244/56skips,Wip861/2skips plus nav/storage/update/NAT
+  suites as applicable; both Windows installers pass. Code NAV5d2437da6c and
+  Wip190f96241c published single-parent. No live install, host bundle or model
+  change; Git Pull/comma reboot. PRs not merged unchanged. See
+  docs/jetlink_pr560_562_review_20261023.md.
+
+
+- On 2026-10-23, owner requests contributor6914f6ce/fbe9a887 and live validation.
+  NAV negotiates connection-owned size-sealed memfd,60B framed input token,
+  synchronous USB and legacy fallback; nonce/generation/age/reply gates remain.
+  Fix invalid warp destination to drain submitted GPU before fallback; add
+  IPC bytes/shared-use scalars to existing timing aggregates. Common DHCP stop
+  waits<=5s for exact owned process; no forced kill/rebind/ownership bypass.
+  Wip DHCP only; existing signed host54e706fa05/N16 stays. Normal comma Git Pull
+  and reboot, no host bundle required. Read-only P baseline120s/2401valid,
+  mean38.852/p9942.717/max45.374ms,zero>50; NAV absent. Native validation and
+  deployment details: docs/jetson_shared_input_integration_20261023.md.
+  Published NAV819ce67c7d/Wipa7658f4b6a; Linux CI passes(NAV1202/56skip,
+  Wip820/2skip broad, other update/nav/storage/NAT checks). Actual offroad QCOM
+  copyout/numpy+receiver64hashes match,4sessions isolated. First root observer
+  prematurely created two msgq files: agent-caused permission/restart window,
+  exact ownership restored, observers drop user; normal second reboot restores
+  HUD too. Final120s2400validconsecutive,mean37.845/p9941.556/max43.692ms,0>50;
+  pose healthy,HUD119/120. Repeat60s1200consecutive,mean37.834/max44.101,0>50,
+  HUD/signal60/60 on both devices. IPC2402calls exactly60B/shared1. No ABBA,
+  road/deadline claim. Naver sender connected but route/TBT absent expired;
+  supplied1.28APK still advertisesnm127,JSONworker2s age gate remains, fallback
+  off_route=true is not proof of physical route deviation. Valid NAV pending;
+  no expiry bypass or APK modification. Raw private; no Jetson update.
+  Follow-up sender guidance resumes without code change:17route points,TBT
+  left1064m,fresh external position.30/30 maps ready+matching nonzero shared
+  nav_map/navigation hashes; actual screen960x540 advancing,decode drops11
+  unchanged. Mode0 excludesmode7preview,not model input. ActiveNAV60s1200valid
+  consecutive model/DM/cameras/odom/pose,mean37.897/p9942.085/max43.448ms,0>50,
+  HUD/signal60/60. Restoration trigger unknown; no road/engine-hash claim.
+
+- On 2026-10-23, owner requests existing signal observations on Jetson USB HUD.
+  NAV forwards bounded allowlisted4KiB/20-track metadata in existing10Hz HUD,
+  drops optional signal field first at96KiB budget; no extra image/message.
+  Original camera dimensions/EOF accompany JPEG; renderer-only adapters reuse
+  status ring and road boxes, clock/duplicate/frame-reuse/expiry/session gates.
+  No vehicle writes, model/control/deadline/priority change.98desktop checks
+  pass/2native skips including actual renderer/draw doubles. Linux1142/56skip,
+  94update/119nav/11storage/11network and Windows installer pass;26pin checks/1skip.
+  Signed host54e706fa05/64707580B/42c2951e full HTTPS/hash verified,1099files.
+  Synthetic1-track232B/sample; no actual vehicle latency/screen/road claim.
+  Signed runtime for Git Pull/BOTH reboot; wip records only. See
+  docs/jetson_usb_signal_display_20261023.md for final release validation.
+
+- On 2026-10-23, owner requests contributor fc02df9/e812f68 integration.
+  Include prerequisite936ea57 native image conversion and os initialization fix.
+  Exact N16 model/spec defaults direct compact-map scatter and exact C uint8/FP16
+  lookup ON; explicit env0 retains original paths, other models unchanged.
+  Native compile/load/self-test failure falls back to NumPy; no per-frame build.
+  Preserve scalar/state validation, expiry/raw maps, projection and USB deadlines.
+  Windows94pass/34native-POSIX skips; combined real-C/session/state checks use
+  Linux CI1117/56skip+94update/119nav/11storage/11network and Windows pass.
+  Source e4779e059a signed64702473B/f17dd14a runtime HTTPS/hash verified;
+  1097 committed payload files,26 pin/bundle checks pass/1skip.
+  No local Orin/USB/road benchmark or additive timing/tail cure claim.
+  Vehicle off, publish signed runtime for Git Pull/BOTH reboot; wip record only.
+  See docs/jetson_n16_staging_integration_20261023.md for validation and release.
+
+- On 2026-10-23, owner requests contributor136119c/2e971ad review, then explicitly
+  requests publication without vehicle tests (Jetson off). NAV accepts exact
+  N16/spec-negotiated2066/18580-float replies, saving66056B/frame, preserving
+  full host/device-state validation, raw/old/v3 fallback and reset semantics.
+  Overlap same-frame CPU fill with existing draining warp hook; no asynchronous
+  USB, model/priority/deadline/control change.119 desktop checks/1POSIXskip;
+  added GPU-state reset/omitted-NaN,10 malformed IPC and actual stream tests.
+  Contributor38.898ms is prototype bench evidence, not our hardware result.
+  Source e7ff007ddc LinuxCI1062/56skip+94update/119nav/11storage/11network and
+  Windows installer pass. Signed64695651B bundle e72bab4b HTTPS/hash verified,
+  all1091 files committed;26 pin/bundle tests pass/1skip. Publish bundle+pin
+  for normal Git Pull/BOTH reboot; wip record
+  only (different model/state runtime). Vehicle read-only, raw private. See
+  docs/jetson_n16_projection_integration_20261023.md for final release/CI.
+
+- On 2026-10-23, owner requests forcing SCC object state during no-lead stops.
+  Camera-SCC CANFD builder trials HUD_LEAD_INFO/OEM SCC_ObjSta 0->2 only after
+  final ACCMode1/StopReq1 and the existing stop controller/interlocks. Real
+  lead states/distances/speeds remain intact; no RX or radar/planner mutation,
+  no latch after departure. Non-camera builder stays unchanged because its
+  object payload differs. No new setting, aReq/jerk/band/retry change, or live
+  vehicle install. Owner reports rollback concentrated on a backward slope;
+  recent no-lead approaches support further study, not a proven object gate.
+  Prior selected stock26 all contain object state2; prior9 failures do too.
+  Desktop231 focused checks pass with Params I/O blocked; three new cases
+  fail original/pass revised. Recorded-input1074-packet open-loop comparison:
+  840 change only state bit109 plus CRC,234 identical. This does not establish
+  ESC acceptance, physical stopping or a road-safe cure. Evidence stays private
+  under .analysis/archive/2026-10-23/stop-1116; normal Git Pull/reboot delivery.
+
+- On 2026-10-22, user reports red Jetson startup and requests latest-drive review.
+  Rearm bounded HELLO grace only after confirmed offroad host absence; retain
+  onroad/unknown-state failures and stop detach from extending grace forever.
+  Connecting-only status lease8s covers3/5s HELLO+2s retry; other/model/health
+  freshness3s unchanged.71 desktop checks pass on each branch; both Linux CIs
+  pass (NAV1008/56skips, Wip801/2skips broad, plus update/nav/storage/network).
+  Ten hash-verified rlogs: latest12:09-12:13 N16 active only final66.223s,
+  1326 valid consecutive outputs, mean42.369/p9946.531/max78.483ms,5>50,
+  no fallback or pose input failure. Prior132.230s2645 outputs,6>50 and one
+  camera-sync frame skip0.95s after join matches odometry invalid/pose inputs
+  bad/locationdTemporaryError; camera captures continuous. Latest60.713ms
+  call has roundtrip55.08 vs server25.50ms, other warp/server tails remain.
+  No complete latency/locationd cure or cable-root-cause claim. Raw private,
+  vehicle read-only; normal Git Pull/reboot, no Jetson bundle. See
+  docs/jetson_startup_drive_review_20261022.md. Both branches single-parent.
+
 - On 2026-10-21, paired USB trace localizes50.092ms call to comma reply
   rearm:8.496ms userspace gap after first read, worker queue0.051ms,
   completion-return0.094ms; normal-priority watchdog wakes sleeping reader.
