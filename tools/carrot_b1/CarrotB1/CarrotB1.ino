@@ -1,5 +1,6 @@
 // Carrot B1, ESP32-S3. 500 kbit/s Classic CAN; commands never contain raw CAN.
 #include <Arduino.h>
+#include <esp_app_desc.h>
 #include <BLEDevice.h>
 #include <Preferences.h>
 #include <BLESecurity.h>
@@ -68,13 +69,23 @@ uint32_t currentSession, deadline, startUs, errorAt, overrideAt;
 uint16_t lastSeq, ack, activeSeq;
 bool leased, active, installed, online, inFlight, haveSaved, owned;
 uint32_t ownedAt, darkAt;
-bool sawLamp;
+bool sawLamp, awaitingLamp;
+uint32_t awaitSince;
 Op ownedDirection;
 uint8_t original[8];
 b1::TapFrame frames[7];
 int frameCount, nextFrame;
 int retriedFrame=-1;
-unsigned arbitrationRetries;
+unsigned arbitrationRetries, frameRetries;
+uint32_t retryAtUs;
+// Initial arbitration has no preceding delivered payload to duplicate. Keep
+// later retries within their existing slot and leave margin to the next frame.
+uint32_t arbitrationWindow(int index) {
+  if (!index) return 40000;
+  if (index+1==frameCount) return 18000;
+  uint32_t slot=frames[index+1].offsetUs-frames[index].offsetUs;
+  return min(uint32_t(18000),slot-5000);
+}
 
 void led(uint8_t r,uint8_t g,uint8_t b) {
   static uint32_t last = UINT32_MAX;
@@ -112,6 +123,7 @@ bool guard(uint32_t now) {
   return leased && currentSession && session.load()==currentSession && int32_t(deadline-now)>0;
 }
 void finish(bool success, const char *reason="cancelled") {
+  awaitingLamp=false;
   if (active) {
     active=inFlight=false;
     if (!mode(false)) { success=false; reason="listen_mode_failed"; }
@@ -120,13 +132,26 @@ void finish(bool success, const char *reason="cancelled") {
   if (success) ack=activeSeq;
   else { ack=0; owned=false; }
 }
+// A lost single shot did not deliver that frame. Earlier confirmed press
+// frames can already have triggered the OEM three-flash sequence. Do not
+// retransmit the tap from the beginning or claim all frames were sent.
+void endArbitration(uint32_t now) {
+  bool observe=owned && confirmedFrames>0 && guard(now) && matched(now);
+  finish(false,"arbitration_budget");
+  if (observe && online) {
+    owned=true;
+    awaitingLamp=true;
+    awaitSince=now;
+  }
+}
 void startTap(const Request &req) {
   uint32_t now=millis();
-  if (active) return;
+  if (active || awaitingLamp) return;
   traceSeq=req.seq;
   confirmedFrames=0;
   arbitrationRetries=0;
   retriedFrame=-1;
+  frameRetries=0; retryAtUs=0;
   traceAlerts=0;
   if (!neutral(now)) { traceReason="not_neutral"; return; }
   if (!guard(now)) { traceReason="expired_at_start"; return; }
@@ -156,8 +181,17 @@ void receiveCan() {
     } else s.set(f.data,now);
     if (owned && &s==&feedback && s.count) {
       uint8_t expected=ownedDirection==Left ? 1 : 2;
-      if ((lamps() & ~expected) || (s.data[1]&5)) { finish(false,"driver_override"); overrideAt=now; }
-      else if (lamps()==expected) { sawLamp=true; darkAt=0; }
+      uint8_t stalkReport=s.data[1]&5;
+      uint8_t expectedStalk=ownedDirection==Left ? 1 : 4;
+      // 0x413 reports the injected one-touch as well as real lever activity.
+      // Allow only a confirmed same-side lamp/stalk pair during this tap.
+      // The independent raw 0x3C1 override check below still runs on every frame.
+      bool tapFeedback=confirmedFrames && stalkReport==expectedStalk && lamps()==expected &&
+                       micros()-startUs <= frames[frameCount-1].offsetUs+50000;
+      if ((lamps() & ~expected) || (stalkReport && !tapFeedback)) {
+        finish(false,"feedback_override"); overrideAt=now;
+      }
+      else if (lamps()==expected) { if (confirmedFrames) sawLamp=true; darkAt=0; }
       else if (sawLamp && !darkAt) darkAt=now;
     }
     if (owned && (!s.count || (&s==&stalk && memcmp(original,s.data,8)))) {
@@ -167,6 +201,10 @@ void receiveCan() {
 }
 class Link : public BLEServerCallbacks {
   void onConnect(BLEServer*) override { session.store(esp_random()|1U); }
+  void onConnect(BLEServer *s, ble_gap_conn_desc *event) override {
+    // 10-15 ms ATT connection interval. Preserve command and lease deadlines.
+    s->updateConnParams(event->conn_handle,8,12,0,400);
+  }
   void onDisconnect(BLEServer *s) override { session.store(0); s->startAdvertising(); }
 };
 class Writer : public BLECharacteristicCallbacks {
@@ -181,7 +219,13 @@ class Writer : public BLECharacteristicCallbacks {
     if (!diff && r.session && r.session==session.load()) xQueueSend(inbox,&r,0);
   }
 };
+constexpr char RELEASE_TAG[]="carrot-b1-release=4";
+char buildId[65];
+
 void setup() {
+  const auto *app=esp_app_get_description();
+  for (size_t i=0; i<sizeof(app->app_elf_sha256); ++i)
+    snprintf(buildId+2*i, 3, "%02x", app->app_elf_sha256[i]);
   Serial.begin(115200); led(22,9,0);
   claims=xQueueCreate(1,sizeof(Claim));
   inbox=xQueueCreate(8,sizeof(Request));
@@ -224,18 +268,25 @@ void loop() {
   uint32_t alerts=0;
   if (online && twai_read_alerts(&alerts,0)==ESP_OK) {
     constexpr uint32_t lostShot=TWAI_ALERT_ARB_LOST | TWAI_ALERT_TX_FAILED;
-    if (active && inFlight && alerts==lostShot && retriedFrame!=nextFrame-1) {
-      // The failed single shot lost arbitration before it could deliver data.
-      // Resubmit through the normal guard and the original frame deadline.
-      retriedFrame=--nextFrame;
-      ++arbitrationRetries;
+    if (active && inFlight && alerts==lostShot) {
+      int frame=nextFrame-1;
+      uint32_t elapsed=micros()-startUs;
+      uint32_t due=elapsed+600+(esp_random()%901);
+      // One shot lost arbitration before delivering payload. Retry only this
+      // frame, inside its original slot, and never retry an ambiguous TX error.
+      if (frameRetries<(frame==0 ? 16U : 8U) && due-frames[frame].offsetUs<arbitrationWindow(frame)) {
+        ++frameRetries; ++arbitrationRetries;
+        retriedFrame=frame; nextFrame=frame; retryAtUs=due; inFlight=false;
+      } else {
+        endArbitration(millis());
+      }
       traceAlerts=alerts;
-      inFlight=false;
     } else if (alerts & ~TWAI_ALERT_TX_SUCCESS) {
       if (active) traceAlerts=alerts;
       finish(false,"twai_alert"); stalk.count=feedback.count=0; errorAt=now;
     } else if (active && inFlight && (alerts&TWAI_ALERT_TX_SUCCESS)) {
-      ++confirmedFrames;
+      if (!confirmedFrames && frameRetries) startUs=micros();
+      ++confirmedFrames; frameRetries=0; retryAtUs=0;
       inFlight=false;
       if (nextFrame==frameCount) finish(true);
     }
@@ -253,7 +304,14 @@ void loop() {
   Request r;
   while (xQueueReceive(inbox,&r,0)==pdTRUE) {
     if (ota::busy || ota::reboot || !sid || r.session!=sid || int16_t(r.seq-lastSeq)<=0 || !r.ttl5ms || r.ttl5ms>70 ||
-        now-r.stamp>=uint32_t(r.ttl5ms)*5 || r.op>HoldRight) continue;
+        r.op>HoldRight) continue;
+    if (now-r.stamp>=uint32_t(r.ttl5ms)*5) {
+      if (!active && (r.op==Left || r.op==Right)) {
+        traceSeq=r.seq; confirmedFrames=0; arbitrationRetries=0; retriedFrame=-1;
+        traceAlerts=0; traceReason="expired_on_arrival";
+      }
+      continue;
+    }
     if (!claimed) {
       if (prefs.putBytes("owner-key",key,sizeof(key))!=sizeof(key)) continue;
       claimed=true;
@@ -276,13 +334,26 @@ void loop() {
   if (owned && !guard(now)) finish(false,"lease_expired");
   if (owned && !matched(now)) finish(false,"stale_can");
   if (owned && now-ownedAt>300000) finish(false,"ownership_expired");
+  if (awaitingLamp) {
+    // receiveCan already cancelled ownership on opposite lamps, an invalid
+    // frame, changed original stalk, or independent lever operation.
+    if (now-awaitSince>=350) {
+      finish(false);
+    } else if (sawLamp && owned && guard(now) && matched(now)) {
+      ack=activeSeq;
+      traceReason="lamp_confirmed_partial";
+      awaitingLamp=false;
+    }
+  }
   if (active) {
     uint32_t elapsed=micros()-startUs;
     if (!guard(millis()) || (inFlight && elapsed-frames[nextFrame-1].offsetUs>40000)) { finish(false,"tx_timeout_or_lease"); errorAt=now; }
-    else if (!inFlight && nextFrame<frameCount && elapsed>=frames[nextFrame].offsetUs) {
+    else if (!inFlight && nextFrame<frameCount && elapsed>=frames[nextFrame].offsetUs && elapsed>=retryAtUs) {
       twai_message_t f={}; f.identifier=0x3c1; f.data_length_code=8; f.ss=1;
       memcpy(f.data,frames[nextFrame].data,8);
-      if (elapsed-frames[nextFrame].offsetUs>=50000 || twai_transmit(&f,0)!=ESP_OK) { finish(false,"late_or_submit_failed"); errorAt=now; }
+      if (frameRetries && elapsed-frames[nextFrame].offsetUs>=arbitrationWindow(nextFrame)) {
+        endArbitration(millis());
+      } else if (elapsed-frames[nextFrame].offsetUs>=50000 || twai_transmit(&f,0)!=ESP_OK) { finish(false,"late_or_submit_failed"); errorAt=now; }
       else { ++nextFrame; inFlight=true; }
     }
   }
@@ -290,11 +361,11 @@ void loop() {
   if (now-published>=20) {
     published=now;
     State state=!online || (errorAt && now-errorAt<500) ? Fault : overrideAt && now-overrideAt<400 ? Override :
-      !matched(now) ? Missing : active ? Sending : neutral(now) ? Ready : Waiting;
+      !matched(now) ? Missing : active ? Sending : (!awaitingLamp && neutral(now)) ? Ready : Waiting;
     Report report={sid,now,ack,state,lamps(),2,lastSeq};
     metaValue->setValue((uint8_t*)&report,sizeof(report));
-    char trace[116];
-    snprintf(trace,sizeof(trace),"seq=%u confirmed=%u reason=%s alerts=%lx retries=%u frame=%d",traceSeq,confirmedFrames,traceReason,(unsigned long)traceAlerts,arbitrationRetries,retriedFrame);
+    char trace[192];
+    snprintf(trace,sizeof(trace),"seq=%u confirmed=%u reason=%s alerts=%lx retries=%u frame=%d elf=%s %s",traceSeq,confirmedFrames,traceReason,(unsigned long)traceAlerts,arbitrationRetries,retriedFrame,buildId,RELEASE_TAG);
     traceValue->setValue(trace);
     char info[24]; snprintf(info,sizeof(info),"3C1=%c 413=%c L=%c R=%c",stalk.fresh(now)?'1':'-',feedback.fresh(now)?'1':'-',
       feedback.fresh(now)?'0'+(lamps()&1):'-',feedback.fresh(now)?'0'+(lamps()>>1):'-');

@@ -94,7 +94,10 @@ def test_monitor_joins_source_only_after_board_authentication(monkeypatch):
     assert writes == [3] and not started
     monitor.next_start = 0
     data = source(time.monotonic())
-    worker.latest = lambda: data
+    def latest():
+      data['stamp'] = time.monotonic()
+      return data
+    worker.latest = latest
     await monitor.exchange(key)
     assert started == [('blink_source.py','ble')]
     assert writes[-1] == 1
@@ -163,3 +166,18 @@ def test_badge_expires_and_hides_if_unregistered(tmp_path):
     data.write_text(json.dumps({'time':10,'state':state}))
     assert status(11,reg,data)==state
     assert status(12,reg,data)=='offline'
+
+
+
+def test_badge_publishes_short_ack_without_lamp_edge(monkeypatch, tmp_path):
+  from openpilot.selfdrive.carrot.bluetooth import b1_monitor as b1
+  monkeypatch.setattr(b1, 'BADGE', tmp_path/'badge')
+  m = b1.Monitor()
+  events = []
+  m.report = lambda name, **fields: events.append((name, fields))
+  m.last_command = {'id':'one','seq':9,'time':10.}
+  m.publish_badge('waiting',10.1,1,None)
+  m.publish_badge('waiting',10.15,1,'one')
+  assert b1.read_json(b1.BADGE)['accepted_id']=='one'
+  m.publish_badge('waiting',10.16,1,'one')
+  assert len(events)==2 and events[-1][1]['seq']==9
