@@ -6,6 +6,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
 import time
 try:
   from .blink_owner import Owner
@@ -103,8 +104,15 @@ class Process:
         break
     return value
 
-  def close(self):
+  def close(self, *, wait=True):
     self.socket.close()  # EOF revokes the worker's guard and CAN lease.
+    if not wait:
+      reaper = threading.Thread(target=self._wait, name='blinker-source-reaper', daemon=True)
+      reaper.start()
+      return reaper
+    self._wait()
+
+  def _wait(self):
     try:
       self.process.wait(timeout=2)
     except subprocess.TimeoutExpired:
@@ -197,6 +205,7 @@ def wire_record(value, token, offset, now):
 class Sender:
   def __init__(self, client, peer):
     self.worker = None
+    self.reaper = None
     self.next_send = 0.
     self.anchor = None
     self.report = None
@@ -206,6 +215,7 @@ class Sender:
     self.owner = Owner('USB CAN')
     self.generation = None
     self.params = None
+    self.last_drop = 0.
     if peer.get('carrot_host') != 'jetson' or peer.get(CAPABILITY) is not True:
       return
     if Path('/TICI').is_file():
@@ -229,7 +239,14 @@ class Sender:
     if not self.enabled or now < self.next_send:
       return
     self.next_send = now + .05
+    # Only the policy source is reaped asynchronously, never the CAN worker.
+    # Do not create overlapping sources or unbounded cleanup threads on flaps.
+    if self.reaper is not None:
+      if self.reaper.is_alive():
+        return
+      self.reaper = None
     if self.worker is not None and self.worker.process.poll() is not None:
+      self._report_drop('source_exit', now, exitcode=self.worker.process.returncode)
       self._stop_source()
       client.t.send(DATA, client._next_seq(), [encode({'token':self.token, 'ok':False, 'events':[]})])
       return
@@ -246,12 +263,20 @@ class Sender:
       available = available and self.params.get_bool('IsOnroad') and not self.params.get_bool('CanfdBlinkerControl')
     generation = state.get('generation')
     if generation != self.generation:
-      self._stop_source()
       self.generation = generation
+      if self.worker is not None:
+        self._report_drop('adapter_changed', now)
+        self._stop_source()
+        client.t.send(DATA, client._next_seq(), [encode({'token':self.token, 'ok':False, 'events':[]})])
+        return
+      self._stop_source()
     self.owner.name = str(state.get('adapter', 'USB CAN'))[:64]
     owns = self.owner.acquire(available and (self.owner.held or state.get('idle') is True))
     if not owns:
       if self.worker is not None:
+        self._report_drop('lease_lost', now, available=available, clock_age=now-self.clock_received,
+                          receiver_available=state.get('available') is True,
+                          receiver_state=str(state.get('state', 'missing'))[:32], receiver_error=str(state.get('error') or '')[:160])
         self._stop_source()
         client.t.send(DATA, client._next_seq(), [encode({'token':self.token, 'ok':False, 'events':[]})])
       return
@@ -282,9 +307,16 @@ class Sender:
 
   def _stop_source(self):
     if self.worker is not None:
-      self.worker.close()
+      # This runs on the model bridge's inference thread. Close the command
+      # channel immediately, but never wait here for Python worker shutdown.
+      self.reaper = self.worker.close(wait=False)
       self.worker = None
     self.owner.release()
+
+  def _report_drop(self, reason, now, **detail):
+    if self.report is not None and now-self.last_drop >= 5:
+      self.report('physicalBlinkerOwnershipLost', reason=reason, **detail)
+      self.last_drop = now
 
   def close(self):
     self._stop_source()
