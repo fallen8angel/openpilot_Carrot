@@ -1,4 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { createSettingBridge } from './setting_bridge.mjs';
 
 const digest = value => createHash('sha256').update(String(value)).digest('hex');
 const token = () => randomBytes(32).toString('base64url');
@@ -16,16 +18,45 @@ export function allowedWebOrigin(origin) {
 }
 
 // Only screen navigation is supported. No values, device credentials or log files.
-// Capabilities are kept hashed in RAM; restart, expiry and disconnect revoke access.
-export function createBridge({ now = Date.now, maxSessions = 1000 } = {}) {
+// Persist only paired capability hashes. Pending commands never survive restart.
+export function createBridge({ now = Date.now, maxSessions = 1000, statePath, isAccountLinked = () => false } = {}) {
+  const settings = createSettingBridge(now);
   const sessions = new Map(), browsers = new Map(), controls = new Map(), codes = new Map();
+  const accountCodes = new Map();
+  const record = s => ({ id: s.id, origin: s.origin, label: s.label, browserHash: s.browserHash, controlHash: s.controlHash });
+  function persist(replacement, removed) {
+    if (!statePath) return;
+    const rows = [...sessions.values()].filter(s => s.controlHash && s.id !== removed && s.id !== replacement?.id).map(record);
+    if (replacement) rows.push(record(replacement));
+    writeFileSync(`${statePath}.tmp`, JSON.stringify({ version: 1, connections: rows }), { mode: 0o600 });
+    renameSync(`${statePath}.tmp`, statePath);
+  }
+  if (statePath) {
+    let saved;
+    try { saved = JSON.parse(readFileSync(statePath, 'utf8')); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (saved) {
+      if (saved.version !== 1 || !Array.isArray(saved.connections) || saved.connections.length > maxSessions) throw new Error('Invalid connection store');
+      for (const row of saved.connections) {
+        if (!allowedWebOrigin(row.origin) || !/^[A-Za-z0-9_-]{43}$/.test(row.id)
+          || !/^[a-f0-9]{64}$/.test(row.browserHash) || !/^[a-f0-9]{64}$/.test(row.controlHash)
+          || typeof row.label !== 'string' || row.label.length > 80
+          || sessions.has(row.id) || browsers.has(row.browserHash) || controls.has(row.controlHash)) throw new Error('Invalid saved connection');
+        const s = { ...record(row), expiresAt: null, lastSeen: 0, command: null, pollAt: -Infinity };
+        sessions.set(s.id, s); browsers.set(s.browserHash, s); controls.set(s.controlHash, s);
+      }
+    }
+  }
   const remove = s => {
+    settings.remove(s.id);
+    if (s.controlHash) persist(null, s.id);
     sessions.delete(s.id); browsers.delete(s.browserHash); codes.delete(s.codeHash);
     if (s.controlHash) controls.delete(s.controlHash);
   };
   function sweep() {
+    for (const [hash, link] of accountCodes) if (link.expiresAt <= now() || !sessions.has(link.id)) accountCodes.delete(hash);
     for (const s of sessions.values()) {
-      if (s.expiresAt <= now() || (!s.controlHash && s.pairExpiresAt <= now())) { remove(s); continue; }
+      if (!s.controlHash && s.pairExpiresAt <= now()) { remove(s); continue; }
       if (s.command?.status === 'queued' && s.command.expiresAt <= now()) s.command.status = 'expired';
     }
   }
@@ -36,19 +67,53 @@ export function createBridge({ now = Date.now, maxSessions = 1000 } = {}) {
     return s;
   }
   function status(s) {
-    return { connected: Boolean(s.controlHash), label: s.label, expires_at: s.expiresAt,
+    return { connected: Boolean(s.controlHash), account_linked: isAccountLinked(s.id), label: s.label, expires_at: s.expiresAt,
       browser_online: s.lastSeen > 0 && now() - s.lastSeen < 15000,
       command: s.command ? { id: s.command.id, name: s.command.name, status: s.command.status,
         expires_at: s.command.expiresAt } : null };
   }
   return {
+    accountSettingStatus(id) { this.accountStatus(id); return settings.status(id); },
+    async accountSettingAction(id, operation, fields = {}) {
+      this.accountStatus(id);
+      settings.queue(id, operation, fields);
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && settings.status(id).status === 'queued') await new Promise(resolve => setTimeout(resolve, 100));
+      this.accountStatus(id);
+      return settings.status(id);
+    },
+    // Internal OAuth interface: the identity comes only from validated credentials.
+    accountStatus(id) {
+      sweep(); const s = sessions.get(id);
+      if (!s?.controlHash) fail('Carrot Web disconnected. Authorize this device again.', 401);
+      return status(s);
+    },
+    accountAction(id, operation, name) {
+      this.accountStatus(id);
+      const s = sessions.get(id);
+      if (operation === 'cancel') { if (s.command?.status === 'queued') s.command.status = 'cancelled'; return status(s); }
+      if (operation !== 'open') fail('Unknown account operation.');
+      if (s.command?.status === 'queued' && s.command.name !== name) fail('Another screen request is pending. Cancel it first.', 409);
+      if (s.command?.status !== 'queued') s.command = { id: token(), name, status: 'queued', expiresAt: now() + 90000 };
+      return status(s);
+    },
+    claimAccountCode(code) {
+      sweep(); const hash = digest(String(code).replace(/[\s-]/g, '').toUpperCase());
+      const link = accountCodes.get(hash), s = link && sessions.get(link.id);
+      if (!s || link.expiresAt <= now()) fail('Invalid or expired device code. Create a new code in Carrot Web.', 401);
+      // Preserve the old conversation capability if already paired.
+      const paired = { ...s, controlHash: s.controlHash || digest(token()), expiresAt: null };
+      persist(paired); Object.assign(s, paired); controls.set(s.controlHash, s);
+      accountCodes.delete(hash); codes.delete(s.codeHash);
+      return { id: s.id, label: s.label };
+    },
     create(origin, label = 'Carrot Web') {
       sweep();
       if (!allowedWebOrigin(origin)) fail('Open this from your local Carrot Web.', 403);
       if (sessions.size >= maxSessions) fail('Pairing capacity reached. Try later.', 429);
       const browserToken = token(), code = randomBytes(10).toString('hex').toUpperCase();
       const s = { id: token(), origin, label: String(label).slice(0, 80), browserHash: digest(browserToken),
-        codeHash: digest(code), pairExpiresAt: now() + 300000, expiresAt: now() + 8 * 3600000,
+        codeHash: digest(code), pairExpiresAt: now() + 300000, expiresAt: now() + 300000,
         lastSeen: 0, command: null, pollAt: -Infinity };
       sessions.set(s.id, s); browsers.set(s.browserHash, s); codes.set(s.codeHash, s);
       return { browser_token: browserToken, pairing_code: code, pairing_expires_at: s.pairExpiresAt,
@@ -57,10 +122,12 @@ export function createBridge({ now = Date.now, maxSessions = 1000 } = {}) {
     pair(code) {
       const s = lookup(codes, String(code).replace(/[\s-]/g, '').toUpperCase());
       if (s.controlHash || s.pairExpiresAt <= now()) fail('Pairing code expired or already used.', 401);
-      const connection = token(); s.controlHash = digest(connection); controls.set(s.controlHash, s);
+      const connection = token(), paired = { ...s, controlHash: digest(connection), expiresAt: null };
+      persist(paired);
+      Object.assign(s, paired); controls.set(s.controlHash, s);
       codes.delete(s.codeHash);
       return { connection_id: connection, ...status(s), scope: 'open_setting_screen_only',
-        note: 'Keep connection_id in this conversation. Never display it or put it in URLs. No repeated pairing during this session.' };
+        note: 'Keep connection_id in this conversation. Never display it or put it in URLs. Reuse it until disconnected; do not request a new code unless authentication fails.' };
     },
     status(connection) { return status(lookup(controls, connection)); },
     open(connection, name) {
@@ -81,6 +148,13 @@ export function createBridge({ now = Date.now, maxSessions = 1000 } = {}) {
       const s = lookup(browsers, key);
       if (s.origin !== origin) fail('Browser origin mismatch.', 403);
       if (operation === 'disconnect') { remove(s); return { disconnected: true }; }
+      if (operation === 'settings_ack') return settings.ack(s.id, body.id, body.result);
+      if (operation === 'account_code') {
+        for (const [hash, link] of accountCodes) if (link.id === s.id) accountCodes.delete(hash);
+        const code = randomBytes(10).toString('hex').toUpperCase();
+        accountCodes.set(digest(code), { id: s.id, expiresAt: now() + 300000 });
+        return { account_code: code, expires_at: now() + 300000 };
+      }
       if (operation === 'ack') {
         if (!s.command || body.id !== s.command.id) fail('Unknown request.', 409);
         if (s.command.status === 'queued') {
@@ -92,7 +166,7 @@ export function createBridge({ now = Date.now, maxSessions = 1000 } = {}) {
       if (operation !== 'poll') fail('Unknown operation.');
       if (now() - s.pollAt < 900) fail('Poll too fast.', 429);
       s.pollAt = now(); s.lastSeen = now();
-      return status(s);
+      return { ...status(s), settings_command: settings.poll(s.id) };
     },
   };
 }
