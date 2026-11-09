@@ -7,7 +7,7 @@ export const settingResult = z.object({
   name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,100}$/).optional(),
   title: z.string().max(160).optional(), current: numeric.optional(), previous: numeric.optional(),
   min: numeric.optional(), max: numeric.optional(), step: numeric.positive().optional(), proposed: numeric.optional(),
-  unit_note: z.string().max(200).optional(), stationary_required: z.boolean().optional(),
+  unit_note: z.string().max(200).optional(), step_note: z.string().max(200).optional(), stationary_required: z.boolean().optional(),
   proposal_id: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
   expires_in_seconds: z.number().int().min(0).max(60).optional(), confirmation_required: z.boolean().optional(),
   error: z.string().max(300).optional(),
@@ -20,7 +20,13 @@ export function createSettingBridge(now = Date.now) {
     expire(); const r = requests.get(id);
     if (!r) return { status: 'none' };
     if (r.status === 'queued' && r.expires_at <= now()) r.status = 'expired';
-    return { status: r.status, request_id: r.id, ...(r.result ? { result: r.result } : {}) };
+    // Old device firmware calls the internal prepare/commit boundary a
+    // confirmation. The user already authorizes an exact command; this is not
+    // a request for another conversational turn. Device validation is unchanged.
+    const result = r.result?.status === 'prepared'
+      ? { ...r.result, confirmation_required: false, commit_required: true }
+      : r.result;
+    return { status: r.status, request_id: r.id, ...(result ? { result } : {}) };
   };
   return {
     status,

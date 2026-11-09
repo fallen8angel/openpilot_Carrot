@@ -1,6 +1,8 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createSettingBridge } from './setting_bridge.mjs';
+import { createDriveBridge } from './drive_bridge.mjs';
+import { createToolsBridge } from './tools_bridge.mjs';
 
 const digest = value => createHash('sha256').update(String(value)).digest('hex');
 const token = () => randomBytes(32).toString('base64url');
@@ -19,8 +21,11 @@ export function allowedWebOrigin(origin) {
 
 // Only screen navigation is supported. No values, device credentials or log files.
 // Persist only paired capability hashes. Pending commands never survive restart.
-export function createBridge({ now = Date.now, maxSessions = 1000, statePath, isAccountLinked = () => false } = {}) {
+export function createBridge({ now = Date.now, maxSessions = 1000, statePath, isAccountLinked = () => false, accountActivity = () => 0 } = {}) {
   const settings = createSettingBridge(now);
+  const toolJobs = createToolsBridge(now);
+  const driving = createDriveBridge(now), waiters = new Map();
+  const wake = id => waiters.get(id)?.();
   const sessions = new Map(), browsers = new Map(), controls = new Map(), codes = new Map();
   const accountCodes = new Map();
   const record = s => ({ id: s.id, origin: s.origin, label: s.label, browserHash: s.browserHash, controlHash: s.controlHash });
@@ -48,7 +53,7 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
     }
   }
   const remove = s => {
-    settings.remove(s.id);
+    settings.remove(s.id); driving.remove(s.id); toolJobs.remove(s.id); wake(s.id);
     if (s.controlHash) persist(null, s.id);
     sessions.delete(s.id); browsers.delete(s.browserHash); codes.delete(s.codeHash);
     if (s.controlHash) controls.delete(s.controlHash);
@@ -56,7 +61,7 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
   function sweep() {
     for (const [hash, link] of accountCodes) if (link.expiresAt <= now() || !sessions.has(link.id)) accountCodes.delete(hash);
     for (const s of sessions.values()) {
-      if (!s.controlHash && s.pairExpiresAt <= now()) { remove(s); continue; }
+      if (!s.controlHash && s.expiresAt <= now()) { remove(s); continue; }
       if (s.command?.status === 'queued' && s.command.expiresAt <= now()) s.command.status = 'expired';
     }
   }
@@ -73,10 +78,53 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
         expires_at: s.command.expiresAt } : null };
   }
   return {
+    async waitForBrowser(key, origin) {
+      const s = lookup(browsers, key);
+      if (s.origin !== origin) fail('Browser origin mismatch.', 403);
+      if (waiters.has(s.id)) fail('A browser poll is already pending.', 409);
+      s.lastSeen = now();
+      if (!settings.poll(s.id) && !driving.poll(s.id) && !toolJobs.poll(s.id) && s.command?.status !== 'queued') {
+        await new Promise(resolve => {
+          const timer = setTimeout(() => { waiters.delete(s.id); resolve(); }, 7500);
+          waiters.set(s.id, () => { clearTimeout(timer); waiters.delete(s.id); resolve(); });
+        });
+      }
+      return this.browser(key, origin, 'poll');
+    },
+    accountDriveStatus(id) {
+      this.accountStatus(id);
+      return driving.status(id);
+    },
+    async accountDriveAction(id, fields) {
+      const state = this.accountStatus(id);
+      if (!state.browser_online) fail('Carrot Web is offline. Do not retry automatically.', 409);
+      const queued = driving.queue(id, fields);
+      if (queued.submitted === false) return queued;
+      wake(id);
+      // Give a fast local acknowledgement a chance to arrive. A voice reply
+      // need not wait for the vehicle to finish a maneuver.
+      const deadline = performance.now() + 400;
+      let status = queued;
+      while (status.status === 'queued' && performance.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        status = this.accountDriveStatus(id);
+        if (status.request_id !== queued.request_id) return { status: 'none' };
+      }
+      return status;
+    },
     accountSettingStatus(id) { this.accountStatus(id); return settings.status(id); },
+    accountToolsStatus(id) { this.accountStatus(id); return toolJobs.status(id); },
+    async accountToolsAction(id, operation, fields = {}) {
+      if (!this.accountStatus(id).browser_online) fail('Carrot Web is offline. Open the app; do not retry automatically.', 409);
+      toolJobs.queue(id, operation, fields); wake(id);
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && toolJobs.status(id).status === 'queued') await new Promise(resolve => setTimeout(resolve, 100));
+      this.accountStatus(id);
+      return toolJobs.status(id);
+    },
     async accountSettingAction(id, operation, fields = {}) {
       this.accountStatus(id);
-      settings.queue(id, operation, fields);
+      settings.queue(id, operation, fields); wake(id);
       const deadline = Date.now() + 8000;
       while (Date.now() < deadline && settings.status(id).status === 'queued') await new Promise(resolve => setTimeout(resolve, 100));
       this.accountStatus(id);
@@ -95,7 +143,7 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
       if (operation !== 'open') fail('Unknown account operation.');
       if (s.command?.status === 'queued' && s.command.name !== name) fail('Another screen request is pending. Cancel it first.', 409);
       if (s.command?.status !== 'queued') s.command = { id: token(), name, status: 'queued', expiresAt: now() + 90000 };
-      return status(s);
+      wake(id); return status(s);
     },
     claimAccountCode(code) {
       sweep(); const hash = digest(String(code).replace(/[\s-]/g, '').toUpperCase());
@@ -137,7 +185,7 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
         fail('Another screen request is pending. Check status or cancel it first.', 409);
       }
       s.command = { id: token(), name, status: 'queued', expiresAt: now() + 90000 };
-      return { ...status(s), note: 'Queued, not yet opened. Return to the paired Carrot Web tab. Only status opened confirms completion.' };
+      wake(s.id); return { ...status(s), note: 'Queued, not yet opened. Return to the paired Carrot Web tab. Only status opened confirms completion.' };
     },
     cancel(connection) {
       const s = lookup(controls, connection);
@@ -146,14 +194,33 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
     },
     browser(key, origin, operation, body = {}) {
       const s = lookup(browsers, key);
+      if (operation === 'relocate') {
+        if (!s.controlHash || !allowedWebOrigin(origin) || !allowedWebOrigin(body.previous_origin)
+          || ![origin, body.previous_origin].includes(s.origin)) fail('Connection move is not authorized.', 403);
+        if (s.origin !== origin) {
+          const next = { ...s, origin, label: new URL(origin).host };
+          persist(next); Object.assign(s, next);
+          // A new address is not permission to replay old commands.
+          settings.remove(s.id); driving.remove(s.id); toolJobs.remove(s.id);
+          s.command = null; s.lastSeen = 0; s.pollAt = -Infinity; wake(s.id);
+          for (const [hash, code] of accountCodes) if (code.id === s.id) accountCodes.delete(hash);
+        }
+        return status(s);
+      }
       if (s.origin !== origin) fail('Browser origin mismatch.', 403);
+      if (operation === 'inspect') return { ...status(s), account_activity_at: accountActivity(s.id) };
       if (operation === 'disconnect') { remove(s); return { disconnected: true }; }
+      if (operation === 'drive_ack') return driving.ack(s.id, body.id, body.result);
       if (operation === 'settings_ack') return settings.ack(s.id, body.id, body.result);
+      if (operation === 'tools_ack') return toolJobs.ack(s.id, body.id, body.result);
       if (operation === 'account_code') {
         for (const [hash, link] of accountCodes) if (link.id === s.id) accountCodes.delete(hash);
         const code = randomBytes(10).toString('hex').toUpperCase();
-        accountCodes.set(digest(code), { id: s.id, expiresAt: now() + 300000 });
-        return { account_code: code, expires_at: now() + 300000 };
+        const expiresAt = now() + 300000;
+        // A freshly issued code must not die with the older unpaired browser lease.
+        if (!s.controlHash) s.expiresAt = expiresAt;
+        accountCodes.set(digest(code), { id: s.id, expiresAt });
+        return { account_code: code, expires_at: expiresAt };
       }
       if (operation === 'ack') {
         if (!s.command || body.id !== s.command.id) fail('Unknown request.', 409);
@@ -166,7 +233,7 @@ export function createBridge({ now = Date.now, maxSessions = 1000, statePath, is
       if (operation !== 'poll') fail('Unknown operation.');
       if (now() - s.pollAt < 900) fail('Poll too fast.', 429);
       s.pollAt = now(); s.lastSeen = now();
-      return { ...status(s), settings_command: settings.poll(s.id) };
+      return { ...status(s), settings_command: settings.poll(s.id), drive_command: driving.poll(s.id), tools_command: toolJobs.poll(s.id) };
     },
   };
 }
@@ -181,7 +248,7 @@ export function installBridgeRoutes(app, bridge) {
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
   });
-  app.post('/bridge/:operation', (req, res) => {
+  app.post('/bridge/:operation', async (req, res) => {
     try {
       const { operation } = req.params;
       if (operation === 'create') {
@@ -192,7 +259,7 @@ export function installBridgeRoutes(app, bridge) {
       }
       const auth = req.headers.authorization || '';
       if (!/^Bearer [A-Za-z0-9_-]{43}$/.test(auth)) return res.status(401).end();
-      res.json(bridge.browser(auth.slice(7), req.headers.origin, operation, req.body));
+      res.json(operation === 'poll_wait' ? await bridge.waitForBrowser(auth.slice(7), req.headers.origin) : bridge.browser(auth.slice(7), req.headers.origin, operation, req.body));
     } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
   });
 }
