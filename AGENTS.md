@@ -1,5 +1,122 @@
 # Repository memory
 
+- 2026-11-17: Evening11ee and morning11ef/f0 add23 full rlogs to retained
+  indicator audit, now426segments/55routes/477798aligned inputs. Bound invalid
+  lane-width gaps by existing150ms continuity while clearing new-admission time.
+  Recover video-confirmed11ee/6+41.508 left crossing; external replay324->325,
+  all existing starts/sides/sources/ends exact. Remove duplicate source adjacency
+  lookup for fresh already-admitted manual edges. Native Kick samples time after
+  reading worker to avoid concurrent publication appearing future-dated, and
+  records one bounded request-end diagnostic. Nine baseline regressions reproduced;
+  96 source-loop comparisons/768 ordinary packets exact; local1249pass/9skip.
+  Reject rearm steering accumulation (new parked-car avoidance indications),
+  invalid-width admission accumulation (11ee/9), and broader2s native tail (five
+  historical requests suppressed in fixed-input counterfactual). Normal-completion
+  minimum retained; two actual f0 short outputs each report two lamp pulses.
+  Unknown-left11f0/5, close opposite turn11f0/8 and other intersection misses remain.
+  Historical11ef/1 handshake cancellation cause and11ee/0 startup admission remain
+  unproven. No vehicle writes/physical cure proof. Details in existing replay doc
+  and private .analysis/scratch/2026-11-17-indicator-fixes. Native/full CI follows.
+
+- 2026-11-16: Owner requests at least two visible flashes for manual CAN-FD
+  indication. Panda/SPAS manual lane/turn normal completion now has a two-second
+  minimum, bound to the first submitted SPAS frame and original model request.
+  Common observation keeps the request alive; transport never revives a cancelled
+  request. Before first submission, normal completion waits at most two seconds
+  from observation start. Driver input, CANCEL/busy, disabling, opposite lamps,
+  stale/invalid inputs, geometry/return/timeout still cancel immediately. USB/B1
+  use the existing zero-minimum path. No new setting or counted flashes. Local
+  1105pass/7platform skips, including delayed first submission and cancellation.
+  Actual physical flash count, ECU acceptance and road behavior unverified.
+  Native/full CI follows this commit. No live vehicle writes.
+
+- 2026-11-16: Owner requests common indicator decisions for USB2CAN/B1 and
+  Panda/SPAS Kick, with settings grouped under Vehicle & Hardware / Indicator
+  Control. Kick now consumes the existing blink_source policy through a local
+  worker; retains exclusive lease, journal/model isolation and verified driver
+  lever priority. Remove separate LaneCrossing detector and model pulse/count
+  settings. Keep CanfdBlinkerKick as output selection and KickMode as transport
+  choice; existing common setting values/defaults govern indication (mode0 stays
+  automatic-off). Retire KickModelMode without migrating it into common choices.
+  Source-loop A/B on baseline90430cd1d3:48 comparisons/384 packet records exact;
+  shared observer, turn, USB/B1 transport algorithms unchanged. Local1013pass/
+  7platform skips. Physical SPAS continuous hold, lamp release and vehicle behavior
+  unverified; no vehicle writes. Native/full CI validation follows this commit.
+
+- 2026-11-15: Complete retained indicator audit uses baseline b12855935aa,
+  403 identified full-log segments/52routes/452218 aligned model frames.
+  TBT D+standstill tiny-negative speed invalidates three journeys. Preserve
+  Travel epoch only for that confirmed stopped noise; replay61starts yields
+  normal completions55->58, inputs4->1, clipped2, all other transitions agree.
+  B1 renews fresh authenticated acknowledged hold before metadata read, keeping
+  source expiry/local guards; 200ms delayed-read regression fails before/passes
+  after. Add timing and eight-exchange diagnostic history. Four historical
+  release5 lease_expired events lack ATT timings, physical cure unverified.
+  Actual cereal slicing disabled following_road_curve via caught TypeError;
+  individual indexing passes real-schema regressions. Manual-turn growth follows
+  partial unwind within current pressed intent, recovering11e3/13+53.048..59.288.
+  Final requests298->299, existing296 exact starts/two~.10s earlier, all existing
+  ends/promotions exact. Reject pre-intent history (new false11d6/0 left) and
+  road-edge fallback (lost real11e3/15 left fork). Four unmarked-road false
+  indications and two11e5/0 source-delivery misses remain. Full truth labels,
+  actual SubMaster receipt/receiver feedback unavailable; no perfect-rate claim.
+  Local889indicator+77Bluetooth pass/8platformskip. No live vehicle writes.
+  Evidence .analysis/archive/2026-11-15/indicator-fixes/INDEX.md and
+  docs/indicator_replay_20261114.md follow-up.
+
+- 2026-11-15: PreparationDeferred previously unwound daemon.main and closed the
+  USB/network owner even when only engine readiness/offroad admission was pending.
+  EngineHost.preload and its worker outlive Session.close; reconnect does not
+  itself restart preparation. Jetson prepare now retains its session, polls STATE
+  for the exact resident SHA onroad, resumes verified ENGINE_REQ when resident or
+  offroad, and handles an ignition change/stale HELLO without unwinding. New setup
+  remains offroad-gated. Setup timeout uses the existing client900s default with
+  one-second status/connection checks; inference deadlines are untouched. Real
+  transport errors, invalid replies, failed engines and mismatched contracts still
+  fail. UI reports resident wait with USB retained. Protocol2/3 framed regressions,
+  ignition changes and a simulated40s build covered;217 local related checks pass.
+  No reporter device access, physical USB test or confirmed readiness root cause.
+
+- 2026-11-15: Reporter Ioniq5 b4dcfe6ce00fe149 route1c/13..15 on16df8e63
+  contains three stationary P/onroad minutes, controls disabled.120 distinct
+  connection transitions,24 PreparationDeferred/waiting cycles averaging7.393s,
+  no ready state or jetsonPerformance. Each deferral precedes software net-down
+  by0.229..0.565s. Internal model3600frames averages25.398ms/max38.925ms,
+  zero frame gaps/invalid cameraOdometry; all3600 livePose valid with good flags.
+  Current Jetson firmware/Super/loaded model and exact deferral reason unrecorded.
+  Loaded=None/wrong SHA while onroad reproduces ignition-off deferral in real
+  mac.prepare; this is a candidate explanation, not proof for this device.
+  Our Nov14 transition event omitted preparation.message and used error='' on
+  every event; SwagLogger interprets presence as ERROR, yielding120 duplicated
+  errorLogMessage events. bfcf747adf records bounded reason/model identities,
+  uses ERROR only for retrying/blocked, shows ignition-off requirement in UI.
+  f636c0b5a2 tests real severity separately from device ZMQ sink.90 local status/
+  startup/HUD checks and Linux43680147528 main2596/56skip plus other groups pass.
+  No reporter device writes or connection-recovery proof.
+  Evidence .analysis/scratch/2026-11-15-ioniq5-route1c.
+
+- 2026-11-15: Owner reports missed turns/lanes and straight-road indications
+  after Nov14 fixes. Post-update11e0 evening/11e1 morning run91eb1e86bb and
+  B1 release5 exact ELF.35 requests, zero reported driver_override, three
+  TWAI0x600 bus-error+TX-failed events, one confirms0 frames/no lamp. Two moving
+  holds lose accepted ID while board remains waiting, subreason absent.
+  Junction relabel gate erased above30kmh manual-turn onset. Far-boundary-only
+  spike erased another approach. Current model lane desire lit on straight
+  travel. Tiny negative estimated speeds ended two stopped holds.
+  Remove manual-turn relabel gate, bounded150ms far-only spike wait with no
+  emission, require current model lane probability plus both boundaries moving
+  .15m/.30..55s, permit existing hold at confirmed D standstill abs(v)<.1m/s.
+  Capture once-per-request lost-ACK diagnostic and late ownership transitions.
+  92836-frame/81-rlog/eight-route fixed-input replay99->102 requests,97 exact,
+  one turn .447s earlier, straight false indication removed, four added manual
+  requests. Two older additions lack retained video for visual classification.
+  Seven regressions fail before correction,898 local checks pass/2skip.
+  Normal GitPull/full comma restart.
+  CAN transmit fault and moving ACK-loss causes remain unresolved. No live
+  writes/actuation or physical proof of Nov15 corrections. Evidence
+  .analysis/archive/2026-11-15/indicators, docs/indicator_replay_20261114.md.
+
+
 - 2026-11-14: SD/NVMe Super image uses reviewed R2 initrd PARTUUID resolution,
   exact-one-device admission, same-disk APP/EFI/DATA, and portable storage format2.
   Official vendor TEGRA_BOOT_STORAGE is deprecated and can remain mmcblk0 when
