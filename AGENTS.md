@@ -1,5 +1,60 @@
 # Repository memory
 
+- 2026-11-18: Indicator continuity replay now covers467 retained full segments/
+  60routes/523934aligned inputs. Bound early manual near-edge retreat by150ms
+  paired-rebase memory; uncertain near-line retreat requires same-side torque,
+  far-line progress and stable geometry within3s. Opposite driver/input guards
+  remain. Consecutive opposite manual turns bridge only the last250ms before
+  existing2s/1s-dark rearm, at10kmh+, with current growing steering. Independent
+  ordinary detector preserves5kmh admission and survives retained-intent expiry.
+  Native363->365, delayed-first-send410ms362->364, external364->366; no previous
+  request removed, two existing starts~100ms earlier/same ends, five lane ends
+  extended. Video confirms added11d6/0+17.410 and11f5/8+49.368. Todayf5/4 hold
+  .200->2.990s, f5/7 .246->2.446s delayed-native. f5/8 cancels after1.700s on
+  opposite driver, so two physical flashes not guaranteed. Reject broad history
+  causing parking/exit indications and next-signal suppression. Three baseline
+  failure shapes reproduced;1184localpass/9platformskip, Wiki25pass. Unknown
+  marking/narrow-width/source-delivery misses remain; no whole-corpus truth rate
+  or physical lamp proof. No vehicle writes. Native/full CI follows publication.
+  Evidence .analysis/archive/2026-11-18/indicator-continuity-fixes/INDEX.md.
+
+- 2026-11-18: Review PR581 EV4 wrapped navigation and PR582 radar load shedding.
+  Integrate EV4 message selection with the existing navigation policy. Scope
+  empty wrapped-route padding and HDA-only availability to EV4, preserving PV5
+  and legacy route handling. Tests cover real EV4 camera/HDA payloads, both HDA
+  buses, startup caching, mode/route admission and padding timeout. Extended
+  inventory covers104segments/23routes/two EV4s, three incomplete tails retained
+  only through complete messages. PR0x092 legacy mapping yields impossible
+  averages384+ and reproduces false section admission on the recorded payload.
+  Remove that unverified position DBC/registration, retain camera/bump/route
+  support; both-bus regressions fail before/pass after. Local252 checks pass;
+  native/full CI follows publication.
+  Hold PR582: exact contributor controller under smooth0.8m/s2 target slowing
+  reproduces lost leadCutInRisk/leadsCutIn and changed leadTwo once vLead falls
+  through0.5m/s. Existing confirmed holds depend on history beyond common_ok.
+  Two deterministic full-controller cases change14/11 frames; this is not a
+  replay of a captured maneuver. Reporter I9 route4cd/26..27 does confirm low
+  radarState cadence. No vehicle writes or measured physical improvement.
+  Private review and raw-log inventory .analysis/scratch/2026-11-18-pr581-582.
+
+- 2026-11-17: Carnival c4dcf95545dafe68 route299/14 on2b202df126 has
+  card state_tail71.409ms and per-frame threadCPUmax13.191ms in the same
+  aggregate, bounding at least58ms of that tail outside thread CPU execution.
+  Original state-publication timing reproduces radarcan inputTimeout within2ms.
+  Stock SCC retains mode1/StopReq1 through the fault, while host inactive output
+  reaches vehicle CAN at51.223s, TCS ACC_REQ clears38ms later, wheels move451ms
+  later. Production builder matches20 packets on mode/stop/acceleration/band.
+  Exact waiting operation remains unrecorded. Add bounded cruise phase wall/CPU
+  timings for Params, Bluetooth, assistant read/completion and button/total work.
+  Existing1Hz card diagnostics retain one correlated state-tail peak with frame,
+  refresh flag and receive timestamp. Eight delay-injection and three card-step
+  checks cover localization/reset/publication. Fixed recorded-input A/B matches
+  all82 scalar helper states on5974 frames, external command channels silent
+  assumed. Local331pass/2skip, six Linux-import cases await native CI. Same-device
+  stock reference12rlogs/34321SCC pairs agrees bus0/bus2 with no host longActive.
+  No historical per-call attribution, live install or physical cure proof.
+  Private evidence .analysis/archive/2026-11-17/carnival-299-14.
+
 - 2026-11-17: Evening11ee and morning11ef/f0 add23 full rlogs to retained
   indicator audit, now426segments/55routes/477798aligned inputs. Bound invalid
   lane-width gaps by existing150ms continuity while clearing new-admission time.
