@@ -1,5 +1,36 @@
 # Repository memory
 
+- 2026-11-27: Review PR588..591 before applying to carrot-wip. Preserve first
+  interrupted-build cutoff, reject failed clean/sync and clock rollback, and only
+  certify unchanged build inputs. Share observed CAN-FD brake bit50, SI yaw,
+  signed steering-rate reconstruction and fresh ECAN/CAM front BSD; keep eight-
+  speed gear clamp GV80-specific and exclude uncalibrated pressure-as-pedal.
+  Alternate navigation is protocol-gated, not GV80-only. Require real fresh
+  POSITION for section control; persistent camera warning alone is insufficient.
+  Curve/ramp and junction acceleration assistance default OFF. Reject unknown
+  exit direction, unrelated ramp paths, wrong lengths, expired route/HDA and
+  UInt8 lane sentinels; external navigation wins. Exclude uncalled auto-overtake
+  code absent from this branch. Contributor source fails12 new counterexamples;
+  reviewed source passes all13. Related offline regression2838pass/2skip plus
+  later primary-protocol regression; real-parser replay17 full segments across
+  nine platform groups passes. Linux startup/native firmware CI follows push.
+  Limited replay coverage is not closed-loop deceleration or vehicle validation.
+  Update six settings' KO/EN guides and Wiki; no vehicle writes or flash.
+
+- 2026-11-26: Review KINGBEAKSUU736a6665 against real GV80 uploads and native
+  forwarding hooks. Camera-SCC LFA FIFO backlog is real; do not claim a complete
+  oscillation cure or that angle control is immune. Drain0x12A only after100
+  consecutive deep request-ON pops. Never amplify the ordinary next torque step,
+  cap skipped step at10, reset confirmation across OFF/low-depth/overflow/init.
+  Preserve six slots, prefill2, reuse2, other IDs and existing overflow policy.
+  Also reject disallowed DLC/relay TX before it can mutate any control FIFO.
+  Contributor counterexamples show0->5->10 becoming0->10 and89ON becoming88ON;
+  amended native hook suite420 passes. Fifteen600s C runs cover clock drift,
+  oscillating torque, OFF pulses and jitter; frequent89ON/2OFF deliberately keeps
+  legacy behavior, including its existing overflow limitations. Windows CFFI
+  SPAS failures reproduce on baseline (packet ABI mismatch); Linux/firmware CI
+  follows publication. No vehicle flash, settings or physical cure claim.
+
 - 2026-11-25: AGNOS updater imports application -> HARDWARE -> TiciLPA ->
   serial before the full runtime bootstrap. Missing pyserial therefore blocks
   the update UI. Prepare the bundled pure-Python pyserial before agnos_init;
